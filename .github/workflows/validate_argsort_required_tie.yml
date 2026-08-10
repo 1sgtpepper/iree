@@ -60,7 +60,6 @@ jobs:
             --iree_drivers=local-task \
             --jobs=2 \
             --local_cpu_resources=4 \
-            --test_jobs=1 \
             --test_output=errors \
             //compiler/src/iree/compiler/Dialect/LinalgExt/IR/test:canonicalize.mlir.test \
             //compiler/src/iree/compiler/Dialect/Flow/IR/test:dispatch_folding.mlir.test \

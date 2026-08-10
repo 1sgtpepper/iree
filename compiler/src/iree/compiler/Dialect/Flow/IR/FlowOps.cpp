@@ -669,6 +669,7 @@ bool dropUnusedAndRedundantDispatchRegionResults(
   auto returnOp =
       cast<Flow::ReturnOp>(regionOp.getBody().front().getTerminator());
   llvm::SetVector<Value> preservedTiedBases;
+  llvm::SmallDenseMap<Operation *, bool> liveOwnerResultUses;
 
   for (const auto &[index, value] : llvm::enumerate(regionOp.getResults())) {
     Type type = value.getType();
@@ -681,10 +682,14 @@ bool dropUnusedAndRedundantDispatchRegionResults(
       // Later uses of the base are legal: Stream materializes copy-on-write for
       // tied dispatch operands. This check only prevents a carrier from keeping
       // an otherwise dead owner alive.
-      preserveRequiredTie =
-          tiedBase && !preservedTiedBases.contains(tiedBase) &&
-          hasLiveOwnerResultUse(regionOp, returnOp,
-                                yieldedVal.get().getDefiningOp());
+      if (tiedBase && !preservedTiedBases.contains(tiedBase)) {
+        Operation *owner = yieldedVal.get().getDefiningOp();
+        auto [it, inserted] = liveOwnerResultUses.try_emplace(owner, false);
+        if (inserted) {
+          it->second = hasLiveOwnerResultUse(regionOp, returnOp, owner);
+        }
+        preserveRequiredTie = it->second;
+      }
       if (preserveRequiredTie) {
         preservedTiedBases.insert(tiedBase);
       }

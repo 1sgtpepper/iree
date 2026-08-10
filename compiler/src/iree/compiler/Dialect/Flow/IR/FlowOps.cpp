@@ -604,6 +604,47 @@ LogicalResult DispatchRegionOp::reifyResultShapes(
   return success();
 }
 
+// Returns the storage base for a required result when preserving the result can
+// form a direct, type-compatible tie to storage outside the dispatch.
+static Value getRequiredExternalTiedResultBase(Flow::DispatchRegionOp regionOp,
+                                               Value value) {
+  auto result = dyn_cast<OpResult>(value);
+  if (!result || !regionOp->isProperAncestor(result.getOwner())) {
+    return {};
+  }
+  auto tiedOp = dyn_cast<IREE::Util::TiedOpInterface>(result.getOwner());
+  if (!tiedOp || !tiedOp.isTiedResultRequired(result.getResultNumber())) {
+    return {};
+  }
+  Value tiedOperand = tiedOp.getTiedResultOperand(result);
+  Value tiedBase = tiedOp.getTiedResult(result.getResultNumber());
+  if (!tiedOperand || tiedOperand != tiedBase ||
+      tiedOperand.getType() != result.getType()) {
+    return {};
+  }
+  Region *baseRegion = tiedBase.getParentRegion();
+  Operation *baseParentOp = baseRegion ? baseRegion->getParentOp() : nullptr;
+  if (!baseParentOp || regionOp->isAncestor(baseParentOp)) {
+    return {};
+  }
+  return tiedBase;
+}
+
+// Returns true when an operation remains live without counting unused values
+// yielded solely to carry its required ties.
+static bool hasLiveOwnerResultUse(Flow::DispatchRegionOp regionOp,
+                                  Flow::ReturnOp returnOp, Operation *owner) {
+  for (Value result : owner->getResults()) {
+    for (OpOperand &use : result.getUses()) {
+      if (use.getOwner() != returnOp ||
+          !regionOp.getResult(use.getOperandNumber()).use_empty()) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
 /// Canonicalizes a DispatchRegionOp: Drop all unused results. Returns `true`
 /// if the IR was modified.
 bool dropUnusedAndRedundantDispatchRegionResults(
@@ -627,11 +668,28 @@ bool dropUnusedAndRedundantDispatchRegionResults(
 
   auto returnOp =
       cast<Flow::ReturnOp>(regionOp.getBody().front().getTerminator());
+  llvm::SetVector<Value> preservedTiedBases;
+
   for (const auto &[index, value] : llvm::enumerate(regionOp.getResults())) {
     Type type = value.getType();
     auto shapedType = dyn_cast<ShapedType>(type);
     OpOperand &yieldedVal = returnOp->getOpOperand(index);
+    bool preserveRequiredTie = false;
     if (value.use_empty()) {
+      Value tiedBase =
+          getRequiredExternalTiedResultBase(regionOp, yieldedVal.get());
+      // Later uses of the base are legal: Stream materializes copy-on-write for
+      // tied dispatch operands. This check only prevents a carrier from keeping
+      // an otherwise dead owner alive.
+      preserveRequiredTie =
+          tiedBase && !preservedTiedBases.contains(tiedBase) &&
+          hasLiveOwnerResultUse(regionOp, returnOp,
+                                yieldedVal.get().getDefiningOp());
+      if (preserveRequiredTie) {
+        preservedTiedBases.insert(tiedBase);
+      }
+    }
+    if (value.use_empty() && !preserveRequiredTie) {
       droppedResultValues[value] = std::nullopt;
     } else if (yieldedResultsSet.contains(yieldedVal.get())) {
       droppedResultValues[value] = yieldedVal.getOperandNumber();
@@ -1115,6 +1173,14 @@ DispatchWorkgroupsOp::cloneReplacementExcludingOperandsAndResults(
   IREE::Util::excludeTiedOperandAndResultIndices(
       excludedOperandIndices, excludedResultIndices, newTiedOperandIndices);
 
+  SmallVector<unsigned> excludedResultArgumentIndices;
+  for (unsigned resultIndex : excludedResultIndices) {
+    if (!getTiedResultOperandIndex(resultIndex).has_value()) {
+      excludedResultArgumentIndices.push_back(
+          getOutputBlockArgument(resultIndex).getArgNumber());
+    }
+  }
+
   auto newOp = DispatchWorkgroupsOp::create(
       rewriter, getLoc(), getWorkload(), newResultTypes, newResultDims,
       newArguments, newArgumentDims, newTiedOperandIndices,
@@ -1133,16 +1199,11 @@ DispatchWorkgroupsOp::cloneReplacementExcludingOperandsAndResults(
   // For dropped results, erase all the store-op uses. It is a pre-requisite
   // that the result can be dropped only if it is written within the dispatch
   // region op.
-  unsigned baseResultIndex = getArguments().size(); // old index
   auto erasedArguments = llvm::to_vector(excludedOperandIndices);
-  for (unsigned i = baseResultIndex, e = newBody.getNumArguments(); i != e;
-       ++i) {
-    if (!is_contained(excludedResultIndices, i - baseResultIndex)) {
-      continue;
-    }
-    auto arg = newBody.front().getArgument(i);
+  for (unsigned argumentIndex : excludedResultArgumentIndices) {
+    auto arg = newBody.front().getArgument(argumentIndex);
     eraseArgUseTree(arg, rewriter);
-    erasedArguments.push_back(i);
+    erasedArguments.push_back(argumentIndex);
   }
   auto &block = newBody.front();
   BitVector eraseIndices(block.getNumArguments());

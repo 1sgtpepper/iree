@@ -222,19 +222,23 @@ util.func public @keep_required_sort_carrier(
 
 // CHECK-LABEL: util.func public @drop_required_carriers_with_dead_owner
 util.func public @drop_required_carriers_with_dead_owner(
-    %keys: tensor<4xi64>, %indices: tensor<4xi64>) {
-  // CHECK-NOT: flow.dispatch.region -> (
-  %result:2 = flow.dispatch.region -> (tensor<4xi64>, tensor<4xi64>) {
+    %keys: tensor<4xi64>, %indices: tensor<4xi64>) -> tensor<4xi64> {
+  // CHECK: %[[RESULT:.+]] = flow.dispatch.region -> (tensor<4xi64>) {
+  // CHECK-NOT: iree_linalg_ext.sort
+  %result:3 = flow.dispatch.region ->
+      (tensor<4xi64>, tensor<4xi64>, tensor<4xi64>) {
     %sorted:2 = iree_linalg_ext.sort dimension(0)
         outs(%keys, %indices : tensor<4xi64>, tensor<4xi64>) {
     ^bb0(%lhs_key: i64, %rhs_key: i64, %lhs_index: i64, %rhs_index: i64):
       %take_lhs = arith.cmpi sle, %lhs_key, %rhs_key : i64
       iree_linalg_ext.yield %take_lhs : i1
     } -> tensor<4xi64>, tensor<4xi64>
-    flow.return %sorted#0, %sorted#1 : tensor<4xi64>, tensor<4xi64>
+    // CHECK: flow.return %{{.+}} : tensor<4xi64>
+    flow.return %sorted#0, %sorted#1, %indices
+        : tensor<4xi64>, tensor<4xi64>, tensor<4xi64>
   }
-  // CHECK: util.return
-  util.return
+  // CHECK: util.return %[[RESULT]] : tensor<4xi64>
+  util.return %result#2 : tensor<4xi64>
 }
 
 // -----
@@ -285,19 +289,21 @@ util.func public @keep_required_sort_carrier_with_live_same_base(
 
 // CHECK-LABEL: util.func public @drop_external_sort_carrier
 util.func public @drop_external_sort_carrier(
-    %keys: tensor<4xi64>, %indices: tensor<4xi64>) -> tensor<4xi64> {
+    %keys: tensor<4xi64>, %indices: tensor<4xi64>)
+    -> (tensor<4xi64>, tensor<4xi64>) {
   %sorted:2 = iree_linalg_ext.sort dimension(0)
       outs(%keys, %indices : tensor<4xi64>, tensor<4xi64>) {
   ^bb0(%lhs_key: i64, %rhs_key: i64, %lhs_index: i64, %rhs_index: i64):
     %take_lhs = arith.cmpi sle, %lhs_key, %rhs_key : i64
     iree_linalg_ext.yield %take_lhs : i1
   } -> tensor<4xi64>, tensor<4xi64>
-  // CHECK-NOT: flow.dispatch.region -> (
-  %unused = flow.dispatch.region -> (tensor<4xi64>) {
-    flow.return %sorted#0 : tensor<4xi64>
+  // CHECK: %[[FORWARDED:.+]] = flow.dispatch.region -> (tensor<4xi64>) {
+  %forwarded:2 = flow.dispatch.region -> (tensor<4xi64>, tensor<4xi64>) {
+    // CHECK: flow.return %{{.+}} : tensor<4xi64>
+    flow.return %sorted#0, %indices : tensor<4xi64>, tensor<4xi64>
   }
-  // CHECK: util.return %{{.+}} : tensor<4xi64>
-  util.return %sorted#0 : tensor<4xi64>
+  // CHECK: util.return %{{.+}}, %[[FORWARDED]] : tensor<4xi64>, tensor<4xi64>
+  util.return %sorted#0, %forwarded#1 : tensor<4xi64>, tensor<4xi64>
 }
 
 // -----

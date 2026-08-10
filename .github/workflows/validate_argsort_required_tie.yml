@@ -1,0 +1,66 @@
+# Copyright 2026 The IREE Authors
+#
+# Licensed under the Apache License v2.0 with LLVM Exceptions.
+# See https://llvm.org/LICENSE.txt for license information.
+# SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
+
+name: Validate argsort required tie
+
+on:
+  push:
+    branches:
+      - validation/argsort-required-tied-result
+
+permissions:
+  contents: read
+
+concurrency:
+  group: validate-argsort-required-tie
+  cancel-in-progress: true
+
+jobs:
+  targeted_tests:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    container:
+      image: ghcr.io/iree-org/cpubuilder_ubuntu_jammy@sha256:78a558b999b230f7e1da376639e14b44f095f30f1777d6a272ba48c0bbdd4ccb
+      options: --mount type=tmpfs,destination=/dev/shm
+      env:
+        SANDBOX_BASE: /dev/shm
+    defaults:
+      run:
+        shell: bash
+    env:
+      SOURCE_SHA: 35a152fda2425f8f2e8b21a0b165b4abf99dec1a
+    steps:
+      - name: Check out exact source revision
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ env.SOURCE_SHA }}
+          submodules: true
+          persist-credentials: false
+      - name: Verify source revision
+        run: test "$(git rev-parse HEAD)" = "${SOURCE_SHA}"
+      - name: Install Python requirements
+        run: python3 -m pip install -r runtime/bindings/python/iree/runtime/build_requirements.txt
+      - name: Install Bazelisk
+        run: ./build_tools/bazel/install_bazelisk.sh 1.21.0
+      - name: Build and run focused tests
+        run: |
+          bazel \
+            --noworkspace_rc \
+            --bazelrc=build_tools/bazel/iree.bazelrc \
+            test \
+            --sandbox_base="${SANDBOX_BASE}" \
+            --config=generic_clang_ci \
+            --noremote_upload_local_results \
+            --iree_compiler_plugins=hal_target_llvm_cpu,hal_target_local \
+            --iree_drivers=local-task \
+            --jobs=2 \
+            --local_cpu_resources=4 \
+            --test_jobs=1 \
+            --test_output=errors \
+            //compiler/src/iree/compiler/Dialect/LinalgExt/IR/test:canonicalize.mlir.test \
+            //compiler/src/iree/compiler/Dialect/Flow/IR/test:dispatch_folding.mlir.test \
+            //compiler/src/iree/compiler/DispatchCreation/test:dispatch_linalg_on_tensors.mlir.test \
+            //tests/e2e/regression:argsort_dynamic.mlir.test

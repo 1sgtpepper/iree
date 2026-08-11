@@ -31,7 +31,8 @@ jobs:
       run:
         shell: bash
     env:
-      SOURCE_SHA: db48238e9d5f2f524fac7b34875eac4f3e6410a8
+      SOURCE_SHA: 1f21e7fec47f330ed5786f09cdddfad6989179b4
+      BAZEL_DISK_CACHE: ${{ runner.temp }}/iree-bazel-disk-cache
     steps:
       - name: Check out exact source revision
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -43,6 +44,14 @@ jobs:
         run: |
           git config --global --add safe.directory "${GITHUB_WORKSPACE}"
           test "$(git rev-parse HEAD)" = "${SOURCE_SHA}"
+      - name: Restore Bazel disk cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        continue-on-error: true
+        with:
+          path: ${{ env.BAZEL_DISK_CACHE }}
+          key: argsort-required-tie-v1-${{ runner.os }}-${{ hashFiles('MODULE.bazel') }}-${{ env.SOURCE_SHA }}
+          restore-keys: |
+            argsort-required-tie-v1-${{ runner.os }}-${{ hashFiles('MODULE.bazel') }}-
       - name: Install Python requirements
         run: python3 -m pip install -r runtime/bindings/python/iree/runtime/build_requirements.txt
       - name: Install Bazelisk
@@ -54,6 +63,7 @@ jobs:
             --bazelrc=build_tools/bazel/iree.bazelrc \
             test \
             --sandbox_base="${SANDBOX_BASE}" \
+            --disk_cache="${BAZEL_DISK_CACHE}" \
             --config=generic_clang_ci \
             --noremote_upload_local_results \
             --iree_compiler_plugins=hal_target_llvm_cpu,hal_target_local \
@@ -65,3 +75,10 @@ jobs:
             //compiler/src/iree/compiler/Dialect/Flow/IR/test:dispatch_folding.mlir.test \
             //compiler/src/iree/compiler/DispatchCreation/test:dispatch_linalg_on_tensors.mlir.test \
             //tests/e2e/regression:argsort_dynamic.mlir.test
+      - name: Save Bazel disk cache
+        if: always()
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        continue-on-error: true
+        with:
+          path: ${{ env.BAZEL_DISK_CACHE }}
+          key: argsort-required-tie-v1-${{ runner.os }}-${{ hashFiles('MODULE.bazel') }}-${{ env.SOURCE_SHA }}

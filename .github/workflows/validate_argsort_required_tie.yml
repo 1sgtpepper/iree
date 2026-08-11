@@ -32,7 +32,7 @@ jobs:
         shell: bash
     env:
       SOURCE_SHA: 1f21e7fec47f330ed5786f09cdddfad6989179b4
-      BAZEL_DISK_CACHE: ${{ runner.temp }}/iree-bazel-disk-cache
+      BAZEL_DISK_CACHE: /tmp/iree-bazel-disk-cache
     steps:
       - name: Check out exact source revision
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

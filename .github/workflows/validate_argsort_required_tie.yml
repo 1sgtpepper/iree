@@ -31,7 +31,7 @@ jobs:
       run:
         shell: bash
     env:
-      SOURCE_SHA: 1f21e7fec47f330ed5786f09cdddfad6989179b4
+      SOURCE_SHA: 81a0dd3ecafb710003e7ab4bdb6dae4eac6549d5
       BAZEL_DISK_CACHE: /tmp/iree-bazel-disk-cache
     steps:
       - name: Check out exact source revision
@@ -56,36 +56,6 @@ jobs:
         run: python3 -m pip install -r runtime/bindings/python/iree/runtime/build_requirements.txt
       - name: Install Bazelisk
         run: ./build_tools/bazel/install_bazelisk.sh 1.21.0
-      - name: Inspect argsort copy-on-write lowering
-        run: |
-          bazel \
-            --noworkspace_rc \
-            --bazelrc=build_tools/bazel/iree.bazelrc \
-            run \
-            --sandbox_base="${SANDBOX_BASE}" \
-            --disk_cache="${BAZEL_DISK_CACHE}" \
-            --config=generic_clang_ci \
-            --noremote_upload_local_results \
-            --iree_compiler_plugins=hal_target_llvm_cpu,hal_target_local \
-            --iree_drivers=local-task \
-            --jobs=4 \
-            --local_cpu_resources=4 \
-            //tools:iree-compile -- \
-            tests/e2e/regression/argsort_dynamic.mlir \
-            --iree-hal-target-device=local \
-            --iree-hal-local-target-device-backends=llvm-cpu \
-            --iree-llvmcpu-target-cpu=generic \
-            --compile-to=flow \
-            -o /tmp/argsort-flow.mlir
-          bazel-bin/tools/iree-compile \
-            tests/e2e/regression/argsort_dynamic.mlir \
-            --iree-hal-target-device=local \
-            --iree-hal-local-target-device-backends=llvm-cpu \
-            --iree-llvmcpu-target-cpu=generic \
-            --compile-to=stream \
-            -o /tmp/argsort-stream.mlir
-          sed -n '/func.func @argsort/,/^  }/p' /tmp/argsort-flow.mlir
-          sed -n '/func.func @argsort/,/^  }/p' /tmp/argsort-stream.mlir
       - name: Build and run focused tests
         run: |
           bazel \

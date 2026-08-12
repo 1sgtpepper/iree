@@ -31,7 +31,7 @@ jobs:
       run:
         shell: bash
     env:
-      SOURCE_SHA: befe343942f17521bf257ae878dcb758166fdd0c
+      SOURCE_SHA: 18df5db60b68b26449d112a4aa72fdd7bde8f65e
       BAZEL_DISK_CACHE: /tmp/iree-bazel-disk-cache
     steps:
       - name: Check out exact source revision
@@ -76,7 +76,7 @@ jobs:
             //compiler/src/iree/compiler/DispatchCreation/test:dispatch_linalg_on_tensors.mlir.test \
             //tests/e2e/regression:argsort_dynamic.mlir.test
       - name: Save Bazel disk cache
-        if: always()
+        if: success()
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         continue-on-error: true
         with:

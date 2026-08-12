@@ -31,7 +31,7 @@ jobs:
       run:
         shell: bash
     env:
-      SOURCE_SHA: 18df5db60b68b26449d112a4aa72fdd7bde8f65e
+      SOURCE_SHA: f050e65e460f26d6d0e064fbc10744acd5b3fcf2
       BAZEL_DISK_CACHE: /tmp/iree-bazel-disk-cache
     steps:
       - name: Check out exact source revision
@@ -75,10 +75,3 @@ jobs:
             //compiler/src/iree/compiler/Dialect/Flow/IR/test:dispatch_folding.mlir.test \
             //compiler/src/iree/compiler/DispatchCreation/test:dispatch_linalg_on_tensors.mlir.test \
             //tests/e2e/regression:argsort_dynamic.mlir.test
-      - name: Save Bazel disk cache
-        if: success()
-        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        continue-on-error: true
-        with:
-          path: ${{ env.BAZEL_DISK_CACHE }}
-          key: argsort-required-tie-v1-${{ runner.os }}-${{ hashFiles('MODULE.bazel') }}-${{ env.SOURCE_SHA }}

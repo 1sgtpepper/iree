@@ -31,7 +31,7 @@ jobs:
       run:
         shell: bash
     env:
-      SOURCE_SHA: 75e7f7c5c368b9f032a9b5b3dcb8bed7baaebc9f
+      SOURCE_SHA: a74d6f162e6823e1db76e0820fa9d28b4d52f184
       BAZEL_DISK_CACHE: /tmp/iree-bazel-disk-cache
     steps:
       - name: Check out exact source revision
@@ -74,4 +74,5 @@ jobs:
             //compiler/src/iree/compiler/Dialect/LinalgExt/IR/test:canonicalize.mlir.test \
             //compiler/src/iree/compiler/Dialect/Flow/IR/test:dispatch_folding.mlir.test \
             //compiler/src/iree/compiler/DispatchCreation/test:dispatch_linalg_on_tensors.mlir.test \
+            //compiler/src/iree/compiler/DispatchCreation/test:form_scalar_dispatches.mlir.test \
             //tests/e2e/regression:argsort_dynamic.mlir.test

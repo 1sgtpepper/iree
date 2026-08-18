@@ -31,7 +31,7 @@ jobs:
       run:
         shell: bash
     env:
-      SOURCE_SHA: ce122ace9ddc1bd65d43d071fff9f4bbda58db23
+      SOURCE_SHA: 52a31ab637c8fb02a28d8c61ce64e43bfc963cb5
       BAZEL_DISK_CACHE: /tmp/iree-bazel-disk-cache
     steps:
       - name: Check out exact source revision

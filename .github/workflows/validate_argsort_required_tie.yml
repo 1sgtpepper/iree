@@ -12,6 +12,7 @@ on:
       - validation/argsort-required-tied-result
 
 permissions:
+  actions: read
   contents: read
 
 env:
@@ -137,3 +138,85 @@ jobs:
           cat /tmp/argsort-without-required-ties.log
           test "$status" -ne 0
           grep -F 'expected no unbounded stack allocations' /tmp/argsort-without-required-ties.log
+      - name: Download matching clang-tidy
+        uses: dawidd6/action-download-artifact@d63b86af1b34672e53c440b1b83979861906bad7 # v24
+        with:
+          repo: iree-org/iree
+          run_id: 32944069152
+          name: iree-clang-tidy-linux-x86_64
+          path: /tmp/iree-clang-tidy
+      - name: Analyze changed C++ lines
+        env:
+          BASE_SHA: 6ec253ad4e259ad256c8a226f7a7a330debf937c
+        run: |
+          test "$(cat /tmp/iree-clang-tidy/llvm-project-revision.txt)" = "$(git -C third_party/llvm-project rev-parse HEAD)"
+          chmod +x /tmp/iree-clang-tidy/clang-tidy
+          /tmp/iree-clang-tidy/clang-tidy --version
+          git diff --exit-code
+          git fetch --no-tags --depth=1 origin "${BASE_SHA}"
+          bazel \
+            --noworkspace_rc \
+            --bazelrc=build_tools/bazel/iree.bazelrc \
+            aquery \
+            --sandbox_base="${SANDBOX_BASE}" \
+            --disk_cache="${BAZEL_DISK_CACHE}" \
+            --config=generic_clang_ci \
+            --noremote_upload_local_results \
+            --iree_compiler_plugins=hal_target_llvm_cpu,hal_target_local \
+            --iree_drivers=local-task \
+            --include_param_files \
+            --output=jsonproto \
+            'mnemonic("CppCompile", set(//compiler/src/iree/compiler/Dialect/Flow/Transforms:Transforms //compiler/src/iree/compiler/ExternalInterfaces:ExternalModels))' \
+            > /tmp/argsort-compile-actions.json
+          bazel --noworkspace_rc --bazelrc=build_tools/bazel/iree.bazelrc \
+            info execution_root > /tmp/argsort-execution-root
+          python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+          import re
+          import subprocess
+
+          root = Path('/tmp/argsort-execution-root').read_text().strip()
+          workspace = Path(os.environ['GITHUB_WORKSPACE'])
+          sources = [
+              'compiler/src/iree/compiler/Dialect/Flow/Transforms/ConvertRegionToWorkgroups.cpp',
+              'compiler/src/iree/compiler/ExternalInterfaces/UtilExternalModels.cpp',
+          ]
+          actions = json.loads(Path('/tmp/argsort-compile-actions.json').read_text())['actions']
+          entries = []
+          for source in sources:
+              matches = []
+              for action in actions:
+                  params = {p['execPath']: p['arguments'] for p in action.get('paramFiles', [])}
+                  args = []
+                  for arg in action['arguments']:
+                      args.extend(params[arg[1:]] if arg.startswith('@') else [arg])
+                  if source in args:
+                      matches.append(args)
+              assert len(matches) == 1, (source, len(matches))
+              entries.append({'directory': root, 'file': str(Path(root) / source),
+                              'arguments': matches[0]})
+          database = Path('/tmp/argsort-compilation-database')
+          database.mkdir(exist_ok=True)
+          (database / 'compile_commands.json').write_text(json.dumps(entries))
+          resource_dir = subprocess.check_output(['clang', '-print-resource-dir'], text=True).strip()
+          for source, entry in zip(sources, entries):
+              diff = subprocess.check_output(
+                  ['git', 'diff', '--unified=0', os.environ['BASE_SHA'],
+                   os.environ['SOURCE_SHA'], '--', source], text=True)
+              ranges = []
+              for start, count in re.findall(r'^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@', diff, re.M):
+                  start, count = int(start), int(count) if count else 1
+                  if count:
+                      ranges.append([start, start + count - 1])
+              assert ranges, source
+              print(f'Analyzing {source} at {os.environ["SOURCE_SHA"]}', flush=True)
+              subprocess.run(
+                  ['/tmp/iree-clang-tidy/clang-tidy', entry['file'],
+                   '-p', str(database),
+                   '--config-file=' + str(workspace / 'compiler/.clang-tidy'),
+                   '--line-filter=' + json.dumps([{'name': source, 'lines': ranges}]),
+                   '--extra-arg=-resource-dir=' + resource_dir,
+                   '--warnings-as-errors=*'], check=True, cwd=root)
+          PY

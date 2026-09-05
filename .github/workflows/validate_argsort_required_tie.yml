@@ -14,12 +14,8 @@ on:
 permissions:
   contents: read
 
-concurrency:
-  group: validate-argsort-required-tie
-  cancel-in-progress: true
-
 env:
-  SOURCE_SHA: 9aa289bb454559a1d0db1b18a2da03f006a9f1f8
+  SOURCE_SHA: ba196c6a9a2578c0412a4659736807ffc813e359
 
 jobs:
   lint:
@@ -39,6 +35,9 @@ jobs:
       - name: Run repository lint checks
         uses: pre-commit/action@2c7b3805fd2a0fd8c1884dcaebf91fc102a13ecd # v3.0.1
   targeted_tests:
+    concurrency:
+      group: validate-argsort-required-tie
+      cancel-in-progress: false
     runs-on: ubuntu-24.04
     timeout-minutes: 360
     container:
@@ -92,6 +91,7 @@ jobs:
             --test_output=errors \
             //compiler/src/iree/compiler/Dialect/LinalgExt/IR/test:canonicalize.mlir.test \
             //compiler/src/iree/compiler/Dialect/Flow/IR/test:dispatch_folding.mlir.test \
+            //compiler/src/iree/compiler/DispatchCreation/test:convert_region_to_workgroups.mlir.test \
             //compiler/src/iree/compiler/DispatchCreation/test:dispatch_linalg_on_tensors.mlir.test \
             //compiler/src/iree/compiler/DispatchCreation/test:form_scalar_dispatches.mlir.test \
             //tests/e2e/regression:argsort_dynamic.mlir.test
@@ -102,3 +102,38 @@ jobs:
         with:
           path: ${{ env.BAZEL_DISK_CACHE }}
           key: ${{ steps.cache.outputs.cache-primary-key }}
+      - name: Confirm missing required ties fails
+        run: |
+          source_file=compiler/src/iree/compiler/ExternalInterfaces/UtilExternalModels.cpp
+          trap 'git restore -- "$source_file"' EXIT
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path("compiler/src/iree/compiler/ExternalInterfaces/UtilExternalModels.cpp")
+          text = path.read_text()
+          required = """      auto blockArgs = sortOp.getRegion().front().getArguments();
+                return !blockArgs[2 * resultIndex].use_empty() ||
+                       !blockArgs[2 * resultIndex + 1].use_empty();"""
+          assert text.count(required) == 1
+          path.write_text(text.replace(required, "      return false;"))
+          PY
+          set +e
+          bazel \
+            --noworkspace_rc \
+            --bazelrc=build_tools/bazel/iree.bazelrc \
+            test \
+            --sandbox_base="${SANDBOX_BASE}" \
+            --disk_cache="${BAZEL_DISK_CACHE}" \
+            --config=generic_clang_ci \
+            --noremote_upload_local_results \
+            --iree_compiler_plugins=hal_target_llvm_cpu,hal_target_local \
+            --iree_drivers=local-task \
+            --jobs=4 \
+            --local_cpu_resources=4 \
+            --test_output=errors \
+            //tests/e2e/regression:argsort_dynamic.mlir.test \
+            > /tmp/argsort-without-required-ties.log 2>&1
+          status=$?
+          set -e
+          cat /tmp/argsort-without-required-ties.log
+          test "$status" -ne 0
+          grep -F 'expected no unbounded stack allocations' /tmp/argsort-without-required-ties.log

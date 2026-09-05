@@ -15,7 +15,7 @@ permissions:
   contents: read
 
 env:
-  SOURCE_SHA: d40427e5506987a396c89229ed4d2a66593331a3
+  SOURCE_SHA: 09b3b717a2b781959105aabd9c6914427767f24c
 
 jobs:
   lint:

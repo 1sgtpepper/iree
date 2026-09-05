@@ -259,10 +259,14 @@ public:
 
   void buildTranslationPassPipeline(IREE::HAL::ExecutableTargetAttr targetAttr,
                                     OpPassManager &passManager) final {
-    bool enableAArch64SME = isAArch64(targetAttr.getConfiguration()) &&
-                            hasSMEFeature(targetAttr.getConfiguration());
-    buildLLVMCPUCodegenPassPipeline(passManager.nest<ModuleOp>(),
-                                    codegenOptions_, enableAArch64SME);
+    DictionaryAttr config = targetAttr.getConfiguration();
+    LLVMCPUPipelineOptions pipelineOpts;
+    pipelineOpts.cpuOpts = codegenOptions_;
+    pipelineOpts.enableAArch64SME = isAArch64(config) && hasSMEFeature(config);
+    pipelineOpts.enableNativeBf16Converts = isRISCV(config) &&
+                                            hasZfbfminFeature(config) &&
+                                            hasZvfbfminFeature(config);
+    buildLLVMCPUCodegenPassPipeline(passManager.nest<ModuleOp>(), pipelineOpts);
     buildCodegenTranslationPostProcessingPassPipeline(passManager);
   }
 
@@ -527,6 +531,15 @@ public:
     // Specialize the module to our target machine.
     llvmModule->setDataLayout(targetMachine->createDataLayout());
     llvmModule->setTargetTriple(targetMachine->getTargetTriple());
+    // An explicit "float-abi" module flag wins; only record the target's ABI
+    // when the module does not already carry one.
+    if (target.floatABI != llvm::FloatABI::Default &&
+        !llvmModule->getModuleFlag("float-abi")) {
+      llvmModule->addModuleFlag(
+          llvm::Module::Error, "float-abi",
+          llvm::MDString::get(llvmModule->getContext(),
+                              llvm::FloatABI::getABITypeName(target.floatABI)));
+    }
 
     // Dump just the codegen bitcode before linking and optimization.
     if (!options.dumpIntermediatesPath.empty()) {

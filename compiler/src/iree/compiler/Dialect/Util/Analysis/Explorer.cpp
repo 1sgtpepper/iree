@@ -569,8 +569,22 @@ TraversalResult Explorer::walkReturnOps(Operation *parentOp,
     auto enumerateTerminatorOps = [&](Region &region) {
       for (auto &block : region) {
         if (auto *terminatorOp = block.getTerminator()) {
-          // TODO(benvanik): ensure this terminator can return to parent? this
-          // region op interface confuses me.
+          auto branchTerminatorOp =
+              dyn_cast<RegionBranchTerminatorOpInterface>(terminatorOp);
+          if (!branchTerminatorOp) {
+            continue;
+          }
+          // Region branch terminators may either return to the parent
+          // operation or branch to another region. Only the former can
+          // provide operands for the parent operation's results.
+          SmallVector<RegionSuccessor, 2> successors;
+          regionOp.getSuccessorRegions(RegionBranchPoint(branchTerminatorOp),
+                                       successors);
+          if (llvm::none_of(successors, [&](RegionSuccessor successor) {
+                return successor == parentOp;
+              })) {
+            continue;
+          }
           LLVM_DEBUG({
             llvm::dbgs() << "  == emitting region branch terminator op ";
             terminatorOp->print(llvm::dbgs(), asmState);
@@ -1277,12 +1291,10 @@ TraversalResult Explorer::walkTransitiveUses(Value value, UseWalkFn fn,
         result |= traverseReturnOp(ownerOp, use.getOperandNumber());
       }
 
-      if (ownerOp->hasTrait<OpTrait::ReturnLike>() &&
-          !isa<CallableOpInterface>(ownerOp->getParentOp())) {
-        auto parent = ownerOp->getParentOp();
-        auto result = parent->getResult(use.getOperandNumber());
-        worklist.insert(result);
-      }
+      // Note that we are not explicitly handling the case of a return op
+      // without a callable parent here since the above
+      // `traverseRegionBranchOp` already handled it (`ReturnLike` implies
+      // `RegionBranchTerminatorOpInterface`).
 
       // Step across global stores and into all of the loads across the program.
       if (auto storeOp =

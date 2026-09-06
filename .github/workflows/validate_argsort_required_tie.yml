@@ -16,7 +16,7 @@ permissions:
   contents: read
 
 env:
-  SOURCE_SHA: 343b4c7df4838d0bb3a5314e3be0b87e8feab06a
+  SOURCE_SHA: 220f8242250780e5f63e7dfb99737e560117eadd
 
 jobs:
   lint:
@@ -138,6 +138,60 @@ jobs:
           cat /tmp/argsort-without-required-ties.log
           test "$status" -ne 0
           grep -F 'expected no unbounded stack allocations' /tmp/argsort-without-required-ties.log
+      - name: Confirm Sort interaction regressions reject unsafe ties
+        run: |
+          python3 - <<'PY'
+          import os
+          from pathlib import Path
+          import re
+          import subprocess
+
+          source = Path('compiler/src/iree/compiler/Dialect/Flow/Transforms/ConvertRegionToWorkgroups.cpp')
+          fixture = Path('compiler/src/iree/compiler/DispatchCreation/test/convert_region_to_workgroups.mlir')
+          original = source.read_text()
+          cases = [
+              ('sort_prefers_returned_required_tie',
+               '    assignTies(requiredTies);',
+               '    assignTies(otherTies);\n    assignTies(requiredTies);'),
+              ('sorts_with_shared_keys',
+               '              return use.getOwner() == &op ||',
+               '              return regionOp->isProperAncestor(use.getOwner()) ||\n'
+               '                     use.getOwner() == &op ||'),
+          ]
+          command = [
+              'bazel', '--noworkspace_rc', '--bazelrc=build_tools/bazel/iree.bazelrc',
+              'test', '--sandbox_base=' + os.environ['SANDBOX_BASE'],
+              '--disk_cache=' + os.environ['BAZEL_DISK_CACHE'],
+              '--config=generic_clang_ci', '--noremote_upload_local_results',
+              '--iree_compiler_plugins=hal_target_llvm_cpu,hal_target_local',
+              '--iree_drivers=local-task', '--jobs=4', '--local_cpu_resources=4',
+              '--test_output=errors',
+              '//compiler/src/iree/compiler/DispatchCreation/test:convert_region_to_workgroups.mlir.test',
+          ]
+          lines = fixture.read_text().splitlines()
+          for name, before, after in cases:
+              assert original.count(before) == 1, name
+              start = next(i for i, line in enumerate(lines, 1)
+                           if line.startswith('// CHECK-LABEL: util.func public @' + name + '('))
+              end = next(i for i in range(start + 1, len(lines) + 1)
+                         if lines[i - 1] == '// -----')
+              log = Path('/tmp/' + name + '-negative-control.log')
+              try:
+                  source.write_text(original.replace(before, after))
+                  with log.open('w') as output:
+                      result = subprocess.run(command, stdout=output, stderr=subprocess.STDOUT)
+                  output = log.read_text()
+                  print(output, flush=True)
+                  assert result.returncode != 0, name + ' unexpectedly passed'
+                  failures = [int(line) for line in re.findall(
+                      r'convert_region_to_workgroups\.mlir:(\d+):\d+: error: CHECK', output)]
+                  assert any(start <= line < end for line in failures), (
+                      name, 'missing FileCheck failure in the new fixture', failures)
+                  print('Confirmed negative control: ' + name, flush=True)
+              finally:
+                  source.write_text(original)
+          subprocess.run(['git', 'diff', '--exit-code'], check=True)
+          PY
       - name: Download matching clang-tidy
         uses: dawidd6/action-download-artifact@d63b86af1b34672e53c440b1b83979861906bad7 # v24
         with:

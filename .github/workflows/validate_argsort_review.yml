@@ -4,7 +4,7 @@
 # See https://llvm.org/LICENSE.txt for license information.
 # SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
-name: Validate argsort pipeline
+name: Validate dispatch metadata
 
 on:
   push:
@@ -16,15 +16,31 @@ permissions:
   contents: read
 
 env:
-  SOURCE_SHA: c059af93cf68af6df458df22a11f0fdc2576f9f3
+  SOURCE_SHA: 146ea2a4b2332b194e5e37db137672a8799a4f6c
 
 jobs:
-  normal_pipeline:
+  lint:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out exact source revision
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ env.SOURCE_SHA }}
+          persist-credentials: false
+      - name: Verify source revision
+        run: test "$(git rev-parse HEAD)" = "${SOURCE_SHA}"
+      - name: Initialize compiler submodule
+        run: git submodule update --init --depth=1 third_party/llvm-project
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+      - name: Run repository lint checks
+        uses: pre-commit/action@2c7b3805fd2a0fd8c1884dcaebf91fc102a13ecd # v3.0.1
+  targeted_tests:
     concurrency:
-      group: validate-argsort-pipeline
+      group: validate-dispatch-metadata
       cancel-in-progress: false
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    timeout-minutes: 45
     container:
       image: ghcr.io/iree-org/cpubuilder_ubuntu_jammy@sha256:78a558b999b230f7e1da376639e14b44f095f30f1777d6a272ba48c0bbdd4ccb
       options: --mount type=tmpfs,destination=/dev/shm
@@ -55,29 +71,224 @@ jobs:
           key: argsort-required-tie-v1-${{ runner.os }}-${{ hashFiles('MODULE.bazel') }}-${{ env.SOURCE_SHA }}
           restore-keys: |
             argsort-required-tie-v1-${{ runner.os }}-${{ hashFiles('MODULE.bazel') }}-
-      - name: Require the existing compiler cache
-        env:
-          CACHE_HIT: ${{ steps.cache.outputs.cache-hit }}
-        run: test "${CACHE_HIT}" = true
+      - name: Require a restored compiler cache
+        run: test -d "${BAZEL_DISK_CACHE}"
+      - name: Install Python requirements
+        run: python3 -m pip install -r runtime/bindings/python/iree/runtime/build_requirements.txt
       - name: Install Bazelisk
         run: ./build_tools/bazel/install_bazelisk.sh 1.21.0
-      - name: Restore cached compiler tools
+      - name: Build and run focused tests
         run: |
-          bazel --noworkspace_rc --bazelrc=build_tools/bazel/iree.bazelrc build \
+          bazel \
+            --noworkspace_rc \
+            --bazelrc=build_tools/bazel/iree.bazelrc \
+            test \
             --sandbox_base="${SANDBOX_BASE}" \
             --disk_cache="${BAZEL_DISK_CACHE}" \
-            --config=generic_clang_ci --noremote_upload_local_results \
+            --config=generic_clang_ci \
+            --noremote_upload_local_results \
             --iree_compiler_plugins=hal_target_llvm_cpu,hal_target_local \
-            --iree_drivers=local-task --jobs=4 --local_cpu_resources=4 \
-            //tools:iree-opt @llvm-project//llvm:FileCheck
+            --iree_drivers=local-task \
+            --jobs=4 \
+            --local_cpu_resources=4 \
+            --test_output=errors --nocache_test_results \
+            //compiler/src/iree/compiler/Dialect/LinalgExt/IR/test:canonicalize.mlir.test \
+            //compiler/src/iree/compiler/Dialect/Flow/IR/test:dispatch_folding.mlir.test \
+            //compiler/src/iree/compiler/DispatchCreation/test:convert_region_to_workgroups.mlir.test \
+            //compiler/src/iree/compiler/DispatchCreation/test:dispatch_linalg_on_tensors.mlir.test \
+            //compiler/src/iree/compiler/DispatchCreation/test:form_scalar_dispatches.mlir.test \
+            //tests/e2e/regression:argsort_dynamic.mlir.test
+      - name: Save focused validation cache
+        if: always() && steps.cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        continue-on-error: true
+        with:
+          path: ${{ env.BAZEL_DISK_CACHE }}
+          key: ${{ steps.cache.outputs.cache-primary-key }}
+      - name: Confirm missing required ties fails
+        run: |
+          source_file=compiler/src/iree/compiler/ExternalInterfaces/UtilExternalModels.cpp
+          trap 'git restore -- "$source_file"' EXIT
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path("compiler/src/iree/compiler/ExternalInterfaces/UtilExternalModels.cpp")
+          text = path.read_text()
+          required = """      auto blockArgs = sortOp.getRegion().front().getArguments();
+                return !blockArgs[2 * resultIndex].use_empty() ||
+                       !blockArgs[2 * resultIndex + 1].use_empty();"""
+          assert text.count(required) == 1
+          path.write_text(text.replace(required, "      return false;"))
+          PY
+          set +e
+          bazel \
+            --noworkspace_rc \
+            --bazelrc=build_tools/bazel/iree.bazelrc \
+            test \
+            --sandbox_base="${SANDBOX_BASE}" \
+            --disk_cache="${BAZEL_DISK_CACHE}" \
+            --config=generic_clang_ci \
+            --noremote_upload_local_results \
+            --iree_compiler_plugins=hal_target_llvm_cpu,hal_target_local \
+            --iree_drivers=local-task \
+            --jobs=4 \
+            --local_cpu_resources=4 \
+            --test_output=errors \
+            //tests/e2e/regression:argsort_dynamic.mlir.test \
+            > /tmp/argsort-without-required-ties.log 2>&1
+          status=$?
+          set -e
+          cat /tmp/argsort-without-required-ties.log
+          test "$status" -ne 0
+          grep -F 'expected no unbounded stack allocations' /tmp/argsort-without-required-ties.log
+      - name: Confirm Sort interaction regressions reject unsafe ties
+        run: |
+          python3 - <<'PY'
+          import os
+          from pathlib import Path
+          import re
+          import subprocess
+
+          source = Path('compiler/src/iree/compiler/Dialect/Flow/Transforms/ConvertRegionToWorkgroups.cpp')
+          fixture = Path('compiler/src/iree/compiler/DispatchCreation/test/convert_region_to_workgroups.mlir')
+          original = source.read_text()
+          cases = [
+              ('sort_prefers_returned_required_tie',
+               '    assignTies(requiredTies);',
+               '    assignTies(otherTies);\n    assignTies(requiredTies);'),
+              ('sorts_with_shared_keys',
+               '              return use.getOwner() == &op ||',
+               '              return regionOp->isProperAncestor(use.getOwner()) ||\n'
+               '                     use.getOwner() == &op ||'),
+          ]
+          command = [
+              'bazel', '--noworkspace_rc', '--bazelrc=build_tools/bazel/iree.bazelrc',
+              'test', '--sandbox_base=' + os.environ['SANDBOX_BASE'],
+              '--disk_cache=' + os.environ['BAZEL_DISK_CACHE'],
+              '--config=generic_clang_ci', '--noremote_upload_local_results',
+              '--iree_compiler_plugins=hal_target_llvm_cpu,hal_target_local',
+              '--iree_drivers=local-task', '--jobs=4', '--local_cpu_resources=4',
+              '--test_output=errors',
+              '//compiler/src/iree/compiler/DispatchCreation/test:convert_region_to_workgroups.mlir.test',
+          ]
+          lines = fixture.read_text().splitlines()
+          for name, before, after in cases:
+              assert original.count(before) == 1, name
+              start = next(i for i, line in enumerate(lines, 1)
+                           if line.startswith('// CHECK-LABEL: util.func public @' + name + '('))
+              end = next(i for i in range(start + 1, len(lines) + 1)
+                         if lines[i - 1] == '// -----')
+              log = Path('/tmp/' + name + '-negative-control.log')
+              try:
+                  source.write_text(original.replace(before, after))
+                  with log.open('w') as output:
+                      result = subprocess.run(command, stdout=output, stderr=subprocess.STDOUT)
+                  output = log.read_text()
+                  print(output, flush=True)
+                  assert result.returncode != 0, name + ' unexpectedly passed'
+                  failures = [int(line) for line in re.findall(
+                      r'convert_region_to_workgroups\.mlir:(\d+):\d+: error: CHECK', output)]
+                  assert any(start <= line < end for line in failures), (
+                      name, 'missing FileCheck failure in the new fixture', failures)
+                  print('Confirmed negative control: ' + name, flush=True)
+              finally:
+                  source.write_text(original)
+          subprocess.run(['git', 'diff', '--exit-code'], check=True)
+          PY
+      - name: Download matching clang-tidy
+        uses: dawidd6/action-download-artifact@d63b86af1b34672e53c440b1b83979861906bad7 # v24
+        with:
+          repo: iree-org/iree
+          run_id: 32944069152
+          name: iree-clang-tidy-linux-x86_64
+          path: /tmp/iree-clang-tidy
+      - name: Analyze changed C++ lines
+        env:
+          BASE_SHA: 6ec253ad4e259ad256c8a226f7a7a330debf937c
+        run: |
+          test "$(cat /tmp/iree-clang-tidy/llvm-project-revision.txt)" = "$(git -C third_party/llvm-project rev-parse HEAD)"
+          chmod +x /tmp/iree-clang-tidy/clang-tidy
+          /tmp/iree-clang-tidy/clang-tidy --version
+          git diff --exit-code
+          git fetch --no-tags --depth=1 origin "${BASE_SHA}"
+          bazel \
+            --noworkspace_rc \
+            --bazelrc=build_tools/bazel/iree.bazelrc \
+            aquery \
+            --sandbox_base="${SANDBOX_BASE}" \
+            --disk_cache="${BAZEL_DISK_CACHE}" \
+            --config=generic_clang_ci \
+            --noremote_upload_local_results \
+            --iree_compiler_plugins=hal_target_llvm_cpu,hal_target_local \
+            --iree_drivers=local-task \
+            --include_param_files \
+            --output=jsonproto \
+            'mnemonic("CppCompile", set(//compiler/src/iree/compiler/Dialect/Flow/Transforms:Transforms //compiler/src/iree/compiler/ExternalInterfaces:ExternalModels))' \
+            > /tmp/argsort-compile-actions.json
+          bazel --noworkspace_rc --bazelrc=build_tools/bazel/iree.bazelrc \
+            info execution_root > /tmp/argsort-execution-root
+          python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+          import re
+          import subprocess
+
+          root = Path('/tmp/argsort-execution-root').read_text().strip()
+          workspace = Path(os.environ['GITHUB_WORKSPACE'])
+          sources = [
+              'compiler/src/iree/compiler/Dialect/Flow/Transforms/ConvertRegionToWorkgroups.cpp',
+              'compiler/src/iree/compiler/ExternalInterfaces/UtilExternalModels.cpp',
+          ]
+          actions = json.loads(Path('/tmp/argsort-compile-actions.json').read_text())['actions']
+          entries = []
+          for source in sources:
+              matches = []
+              for action in actions:
+                  params = {p['execPath']: p['arguments'] for p in action.get('paramFiles', [])}
+                  args = []
+                  for arg in action['arguments']:
+                      args.extend(params[arg[1:]] if arg.startswith('@') else [arg])
+                  if source in args:
+                      matches.append(args)
+              assert len(matches) == 1, (source, len(matches))
+              entries.append({'directory': root, 'file': str(Path(root) / source),
+                              'arguments': matches[0]})
+          database = Path('/tmp/argsort-compilation-database')
+          database.mkdir(exist_ok=True)
+          (database / 'compile_commands.json').write_text(json.dumps(entries))
+          resource_dir = subprocess.check_output(['clang', '-print-resource-dir'], text=True).strip()
+          for source, entry in zip(sources, entries):
+              diff = subprocess.check_output(
+                  ['git', 'diff', '--unified=0', os.environ['BASE_SHA'],
+                   os.environ['SOURCE_SHA'], '--', source], text=True)
+              ranges = []
+              for start, count in re.findall(r'^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@', diff, re.M):
+                  start, count = int(start), int(count) if count else 1
+                  if count:
+                      ranges.append([start, start + count - 1])
+              assert ranges, source
+              print(f'Analyzing {source} at {os.environ["SOURCE_SHA"]}', flush=True)
+              subprocess.run(
+                  ['/tmp/iree-clang-tidy/clang-tidy', entry['file'],
+                   '-p', str(database),
+                   '--config-file=' + str(workspace / 'compiler/.clang-tidy'),
+                   '--line-filter=' + json.dumps([{'name': source, 'lines': ranges}]),
+                   '--extra-arg=-resource-dir=' + resource_dir,
+                   '--warnings-as-errors=*'], check=True, cwd=root)
+          PY
+      - name: Compare capture metadata work at exact revisions
+        run: |
+          git fetch --no-tags --depth=1 origin "${GITHUB_SHA}" \
+            c059af93cf68af6df458df22a11f0fdc2576f9f3
+          git show "${GITHUB_SHA}:review-validation/probe_dispatch_metadata.py" > "${RUNNER_TEMP}/probe_dispatch_metadata.py"
+          python3 "${RUNNER_TEMP}/probe_dispatch_metadata.py" "${RUNNER_TEMP}/metadata-probes"
       - name: Check unused Sorts in the normal pipeline
         run: |
-          git fetch --no-tags --depth=1 origin "${GITHUB_SHA}"
-          git show "${GITHUB_SHA}:review-validation/normal-pipeline-liveness.mlir" > "${RUNNER_TEMP}/normal-pipeline-liveness.mlir"
-          bazel-bin/tools/iree-opt "${RUNNER_TEMP}/normal-pipeline-liveness.mlir" \
+          git show "${GITHUB_SHA}:review-validation/normal-pipeline-liveness.mlir" > "${RUNNER_TEMP}/metadata-probes/normal-pipeline-liveness.mlir"
+          bazel-bin/tools/iree-opt "${RUNNER_TEMP}/metadata-probes/normal-pipeline-liveness.mlir" \
             --split-input-file --mlir-disable-threading \
             --iree-dispatch-creation-pipeline \
-            > "${RUNNER_TEMP}/normal-pipeline.mlir"
+            > "${RUNNER_TEMP}/metadata-probes/normal-pipeline.mlir"
           bazel --noworkspace_rc --bazelrc=build_tools/bazel/iree.bazelrc run \
             --sandbox_base="${SANDBOX_BASE}" \
             --disk_cache="${BAZEL_DISK_CACHE}" \
@@ -85,15 +296,13 @@ jobs:
             --iree_compiler_plugins=hal_target_llvm_cpu,hal_target_local \
             --iree_drivers=local-task --jobs=4 --local_cpu_resources=4 \
             @llvm-project//llvm:FileCheck -- \
-            "${RUNNER_TEMP}/normal-pipeline-liveness.mlir" \
-            < "${RUNNER_TEMP}/normal-pipeline.mlir"
+            "${RUNNER_TEMP}/metadata-probes/normal-pipeline-liveness.mlir" \
+            < "${RUNNER_TEMP}/metadata-probes/normal-pipeline.mlir"
           git diff --exit-code
-      - name: Save normal pipeline evidence
+      - name: Save capture metadata evidence
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: normal-pipeline-evidence
-          path: |
-            ${{ runner.temp }}/normal-pipeline-liveness.mlir
-            ${{ runner.temp }}/normal-pipeline.mlir
+          name: metadata-probes
+          path: ${{ runner.temp }}/metadata-probes
           if-no-files-found: warn

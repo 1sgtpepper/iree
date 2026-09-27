@@ -52,8 +52,22 @@ def fixture(width, mode):
     lines = [
         f"util.func public @wide_sort({', '.join(arguments)})",
         f"    -> ({result_types}) {{",
-        f"  %results:{width} = flow.dispatch.region -> ({result_types}) {{",
     ]
+    for dimension in range(max(ty.count("?") for ty in types)):
+        lines.append(f"  %c{dimension} = arith.constant {dimension} : index")
+    region_types = []
+    for index, ty in enumerate(types):
+        dims = []
+        for dimension in range(ty.count("?")):
+            dim = f"%dim_{index}_{dimension}"
+            lines.append(
+                f"  {dim} = tensor.dim %indices_{index}, %c{dimension} : {ty}"
+            )
+            dims.append(dim)
+        region_types.append(ty + ("{" + ", ".join(dims) + "}" if dims else ""))
+    lines.append(
+        f"  %results:{width} = flow.dispatch.region -> ({', '.join(region_types)}) {{"
+    )
     for index, ty in enumerate(types):
         lines.extend([
             f"    %sorted_{index}:2 = iree_linalg_ext.sort dimension(0)",

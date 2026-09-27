@@ -91,7 +91,7 @@ jobs:
             --iree_drivers=local-task \
             --jobs=4 \
             --local_cpu_resources=4 \
-            --test_output=errors --nocache_test_results \
+            --test_output=errors \
             //compiler/src/iree/compiler/Dialect/LinalgExt/IR/test:canonicalize.mlir.test \
             //compiler/src/iree/compiler/Dialect/Flow/IR/test:dispatch_folding.mlir.test \
             //compiler/src/iree/compiler/DispatchCreation/test:convert_region_to_workgroups.mlir.test \

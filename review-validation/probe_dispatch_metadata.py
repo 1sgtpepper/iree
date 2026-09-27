@@ -98,9 +98,9 @@ def instrument(label):
             source = replace_once(
                 source,
                 f"llvm::find(argumentsSet, {variable})",
-                "llvm::find_if(argumentsSet, [&](Value candidate) { "
+                f"llvm::find_if(argumentsSet, [target = {variable}](Value candidate) {{ "
                 'llvm::errs() << "capture-index-visit\\n"; '
-                f"return candidate == {variable}; }})",
+                "return candidate == target; })",
             )
         assert source.count("IREE::Util::findDynamicDimsInList(") == 3
         source = source.replace(

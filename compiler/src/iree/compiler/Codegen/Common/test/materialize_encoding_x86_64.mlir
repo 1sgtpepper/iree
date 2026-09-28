@@ -1560,6 +1560,54 @@ func.func @dequantization(
 
 // -----
 
+#map = affine_map<(d0, d1, d2, d3) -> (d0, d3, d2)>
+#map1 = affine_map<(d0, d1, d2, d3) -> (d0, d1, d3)>
+#map2 = affine_map<(d0, d1, d2, d3) -> (d0, d1, d2)>
+#map3 = affine_map<(d0, d1, d2) -> (d1, d0, d2)>
+#map4 = affine_map<(d0, d1, d2) -> (d1, d0)>
+#encoding_ibmap = #iree_encoding.encoding<operand_index = 1 : index, op_type = matmul, element_types = [f32, f32, f32], user_indexing_maps = [#map, [#map1, #map3], #map2]>
+#encoding_bmap = #iree_encoding.encoding<operand_index = 1 : index, op_type = matmul, element_types = [f32, f32, f32], user_indexing_maps = [#map, [#map1, #map4], #map2]>
+#encoding = #iree_encoding.encoding<operand_index = 1 : index, op_type = matmul, element_types = [f32, f32, f32], user_indexing_maps = [#map, #map1, #map2]>
+func.func @dequantization_transposed(
+    %7: tensor<2x11008x128xi8, #encoding_ibmap>,
+    %8: tensor<2x11008xf32, #encoding_bmap>,
+    %9: tensor<2x11008xf32, #encoding_bmap>
+) -> tensor<11008x2x128xf32, #encoding> attributes {
+  hal.executable.target = #hal.executable.target<"llvm-cpu", "xyz", {target_triple="x86_64-xyz-xyz", cpu_features="+avx512f", iree.encoding.resolver = #iree_cpu.cpu_encoding_resolver<>}>
+} {
+  %13 = tensor.empty() : tensor<11008x2x128xf32, #encoding>
+  %14 = linalg.generic {indexing_maps = [affine_map<(d0, d1, d2) -> (d0, d1, d2)>, affine_map<(d0, d1, d2) -> (d0, d1)>, affine_map<(d0, d1, d2) -> (d0, d1)>, affine_map<(d0, d1, d2) -> (d1, d0, d2)>], iterator_types = ["parallel", "parallel", "parallel"]} ins(%7, %8, %9 : tensor<2x11008x128xi8, #encoding_ibmap>, tensor<2x11008xf32, #encoding_bmap>, tensor<2x11008xf32, #encoding_bmap>) outs(%13 : tensor<11008x2x128xf32, #encoding>) {
+  ^bb0(%in: i8, %in_0: f32, %in_1: f32, %out: f32):
+    %21 = arith.extui %in : i8 to i32
+    %22 = arith.uitofp %21 : i32 to f32
+    %23 = arith.subf %22, %in_1 : f32
+    %24 = arith.mulf %23, %in_0 : f32
+    linalg.yield %24 : f32
+  } -> tensor<11008x2x128xf32, #encoding>
+  return %14 : tensor<11008x2x128xf32, #encoding>
+}
+
+//   CHECK-DAG: #[[$MAP:.+]] = affine_map<(d0, d1, d2, d3, d4) -> (d0, d1, d2, d3, d4)>
+//   CHECK-DAG: #[[$MAP1:.+]] = affine_map<(d0, d1, d2, d3, d4) -> (d0, d1, d3)>
+// CHECK-LABEL: func.func @dequantization_transposed(
+//  CHECK-SAME:   %[[WEIGHT:[a-zA-Z0-9]+]]: tensor<11008x1x128x16x1xi8>
+//  CHECK-SAME:   %[[WEIGHT_SCALES:[a-zA-Z0-9]+]]: tensor<11008x1x16xf32>
+//  CHECK-SAME:   %[[WEIGHT_ZPS:[a-zA-Z0-9]+]]: tensor<11008x1x16xf32>
+//  CHECK-SAME: ) -> tensor<11008x1x128x16x1xf32>
+//   CHECK-DAG:   %[[EMPTY_WEIGHT:.+]] = tensor.empty() : tensor<11008x1x128x16x1xf32>
+//   CHECK-DAG:   %[[WEIGHT_DEQUANT:.+]] = linalg.generic
+//  CHECK-SAME:       indexing_maps = [#[[$MAP]], #[[$MAP1]], #[[$MAP1]], #[[$MAP]]]
+//  CHECK-SAME:       iterator_types = ["parallel", "parallel", "parallel", "parallel", "parallel"]
+//  CHECK-SAME:       ins(%[[WEIGHT]], %[[WEIGHT_SCALES]], %[[WEIGHT_ZPS]] : tensor<11008x1x128x16x1xi8>, tensor<11008x1x16xf32>, tensor<11008x1x16xf32>)
+//  CHECK-SAME:       outs(%[[EMPTY_WEIGHT]] : tensor<11008x1x128x16x1xf32>)
+//       CHECK:     arith.extui
+//       CHECK:     arith.uitofp
+//       CHECK:     arith.subf
+//       CHECK:     arith.mulf
+//       CHECK:   return %[[WEIGHT_DEQUANT]]
+
+// -----
+
 #encoding = #iree_encoding.encoding<operand_index = 0 : index, op_type = matmul, element_types = [f32, f32, f32], user_indexing_maps = [[affine_map<(d0, d1, d2, d3) -> (d0, d3, d2)>, affine_map<(d0, d1, d2) -> (d0, d1, d2)>], affine_map<(d0, d1, d2, d3) -> (d0, d1, d3)>, affine_map<(d0, d1, d2, d3) -> (d0, d1, d2)>], iteration_sizes = [2, 128, 64, ?]>
 #encoding_bcast = #iree_encoding.encoding<operand_index = 0 : index, op_type = matmul, element_types = [f32, f32, f32], user_indexing_maps = [[affine_map<(d0, d1, d2, d3) -> (d0, d3, d2)>,  affine_map<(d0, d1, d2) -> (d1, d2)>], affine_map<(d0, d1, d2, d3) -> (d0, d1, d3)>, affine_map<(d0, d1, d2, d3) -> (d0, d1, d2)>], iteration_sizes = [2, 128, 64, ?]>
 func.func @broadcast_batch(
@@ -1708,6 +1756,46 @@ func.func @generic_with_0d_tensor(
 //  CHECK-SAME:     ins(%[[INPUT]], %[[INPUT_0D]]
 //  CHECK-SAME:     outs(%[[FILL]]
 //       CHECK:   return %[[GENERIC]]
+
+// -----
+
+#executable_target = #hal.executable.target<"llvm-cpu", "xyz", {cpu_features = "+avx512f", iree.encoding.resolver = #iree_cpu.cpu_encoding_resolver<>, target_triple = "x86_64-xyz-xyz"}>
+#map = affine_map<(d0, d1, d2) -> (d0, d2)>
+#map1 = affine_map<(d0, d1, d2) -> (d2, d1)>
+#map2 = affine_map<(d0, d1, d2) -> (d0, d1)>
+#map3 = affine_map<(d0, d1) -> (d1, d0)>
+#map4 = affine_map<(d0, d1) -> (d0, d1)>
+#encoding = #iree_encoding.encoding<operand_index = 2 : index, op_type = matmul, element_types = [f32, f32, f32], user_indexing_maps = [#map, #map1, #map2], iteration_sizes = [4, 32, 27]>
+#transposed_encoding = #iree_encoding.encoding<operand_index = 2 : index, op_type = matmul, element_types = [f32, f32, f32], user_indexing_maps = [#map, #map1, [#map2, #map3]], iteration_sizes = [4, 32, 27]>
+func.func @generic_with_permuted_output_maps(
+    %arg0: tensor<4x32xf32, #encoding>
+) -> (tensor<32x4xf32, #transposed_encoding>, tensor<4x32xf32, #encoding>)
+    attributes {hal.executable.target = #executable_target} {
+  %0 = tensor.empty() : tensor<32x4xf32, #transposed_encoding>
+  %1 = tensor.empty() : tensor<4x32xf32, #encoding>
+  %2:2 = linalg.generic {
+      indexing_maps = [#map4, #map3, #map4],
+      iterator_types = ["parallel", "parallel"]
+  } ins(%arg0 : tensor<4x32xf32, #encoding>)
+    outs(%0, %1 : tensor<32x4xf32, #transposed_encoding>, tensor<4x32xf32, #encoding>) {
+  ^bb0(%in: f32, %out: f32, %out_0: f32):
+    linalg.yield %in, %in : f32, f32
+  } -> (tensor<32x4xf32, #transposed_encoding>, tensor<4x32xf32, #encoding>)
+  return %2#0, %2#1 : tensor<32x4xf32, #transposed_encoding>, tensor<4x32xf32, #encoding>
+}
+
+// CHECK-DAG: #[[$MAP:.+]] = affine_map<(d0, d1, d2, d3) -> (d0, d1, d2, d3)>
+// CHECK-LABEL: func.func @generic_with_permuted_output_maps(
+// CHECK-SAME:    %[[ARG0:[a-zA-Z0-9]+]]: tensor<1x2x4x16xf32>
+// CHECK-SAME:  ) -> (tensor<1x2x4x16xf32>, tensor<1x2x4x16xf32>)
+// CHECK:         %[[EMPTY:.+]] = tensor.empty() : tensor<1x2x4x16xf32>
+// CHECK:         %[[GENERIC:.+]]:2 = linalg.generic
+// CHECK-SAME:      indexing_maps = [#[[$MAP]], #[[$MAP]], #[[$MAP]]]
+// CHECK-SAME:      iterator_types = ["parallel", "parallel", "parallel", "parallel"]
+// CHECK-SAME:      ins(%[[ARG0]] : tensor<1x2x4x16xf32>)
+// CHECK-SAME:      outs(%[[EMPTY]], %[[EMPTY]] : tensor<1x2x4x16xf32>, tensor<1x2x4x16xf32>)
+// CHECK:           linalg.yield
+// CHECK:         return %[[GENERIC]]#0, %[[GENERIC]]#1
 
 // -----
 

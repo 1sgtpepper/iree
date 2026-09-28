@@ -304,19 +304,23 @@ EXPORTS
   mlirConditionallySpeculatableOpInterfaceTypeID
   mlirContextAppendDialectRegistry
   mlirContextAttachDiagnosticHandler
+  mlirContextBeginTransientScope
   mlirContextCreate
   mlirContextCreateWithRegistry
   mlirContextCreateWithThreading
   mlirContextDestroy
   mlirContextDetachDiagnosticHandler
   mlirContextEnableMultithreading
+  mlirContextEndTransientScope
   mlirContextEqual
   mlirContextGetAllowUnregisteredDialects
+  mlirContextGetLoadedDialect
   mlirContextGetNumLoadedDialects
   mlirContextGetNumRegisteredDialects
   mlirContextGetNumThreads
   mlirContextGetOrLoadDialect
   mlirContextGetThreadPool
+  mlirContextIsInTransientScope
   mlirContextIsRegisteredOperation
   mlirContextLoadAllAvailableDialects
   mlirContextSetAllowUnregisteredDialects
@@ -331,6 +335,7 @@ EXPORTS
   mlirConversionPatternGetTypeConverter
   mlirConversionPatternRewriterAsPatternRewriter
   mlirConversionPatternRewriterConvertRegionTypes
+  mlirConversionPatternRewriterReplaceOpWithMultiple
   mlirConversionTargetAddDynamicallyLegalDialect
   mlirConversionTargetAddDynamicallyLegalOp
   mlirConversionTargetAddIllegalDialect
@@ -494,6 +499,9 @@ EXPORTS
   mlirFloat8E5M2TypeGet
   mlirFloat8E5M2TypeGetName
   mlirFloat8E5M2TypeGetTypeID
+  mlirFloat8E5M3FNUTypeGet
+  mlirFloat8E5M3FNUTypeGetName
+  mlirFloat8E5M3FNUTypeGetTypeID
   mlirFloat8E8M0FNUTypeGet
   mlirFloat8E8M0FNUTypeGetName
   mlirFloat8E8M0FNUTypeGetTypeID
@@ -621,7 +629,7 @@ EXPORTS
   mlirLLVMArrayTypeGetNumElements
   mlirLLVMArrayTypeGetTypeID
   mlirLLVMAttrIsAMDConstantAttr
-  mlirLLVMAttrIsAMDFuncAttr
+  mlirLLVMAttrIsAMDGlobalValueAttr
   mlirLLVMAttrIsAMDNodeAttr
   mlirLLVMAttrIsAMDStringAttr
   mlirLLVMCConvAttrGet
@@ -635,6 +643,8 @@ EXPORTS
   mlirLLVMDICompileUnitAttrGet
   mlirLLVMDICompileUnitAttrGetName
   mlirLLVMDICompileUnitAttrGetRecSelf
+  mlirLLVMDICompileUnitAttrGetWithSourceLanguageDialect
+  mlirLLVMDICompileUnitAttrGetWithSourceLanguageName
   mlirLLVMDICompositeTypeAttrGet
   mlirLLVMDICompositeTypeAttrGetName
   mlirLLVMDICompositeTypeAttrGetRecSelf
@@ -687,9 +697,9 @@ EXPORTS
   mlirLLVMMDConstantAttrGet
   mlirLLVMMDConstantAttrGetTypeID
   mlirLLVMMDConstantAttrGetValue
-  mlirLLVMMDFuncAttrGet
-  mlirLLVMMDFuncAttrGetName
-  mlirLLVMMDFuncAttrGetTypeID
+  mlirLLVMMDGlobalValueAttrGet
+  mlirLLVMMDGlobalValueAttrGetName
+  mlirLLVMMDGlobalValueAttrGetTypeID
   mlirLLVMMDNodeAttrGet
   mlirLLVMMDNodeAttrGetNumOperands
   mlirLLVMMDNodeAttrGetOperand
@@ -775,8 +785,28 @@ EXPORTS
   mlirMemRefTypeGetName
   mlirMemRefTypeGetStridesAndOffset
   mlirMemRefTypeGetTypeID
+  mlirMemoryEffectGetEffectID
+  mlirMemoryEffectInstanceClone
+  mlirMemoryEffectInstanceCreate
+  mlirMemoryEffectInstanceCreateForBlockArgument
+  mlirMemoryEffectInstanceCreateForOpOperand
+  mlirMemoryEffectInstanceCreateForOpResult
+  mlirMemoryEffectInstanceCreateForSymbol
+  mlirMemoryEffectInstanceDestroy
+  mlirMemoryEffectInstanceGetEffect
+  mlirMemoryEffectInstanceGetEffectOnFullRegion
+  mlirMemoryEffectInstanceGetParameters
+  mlirMemoryEffectInstanceGetResource
+  mlirMemoryEffectInstanceGetStage
+  mlirMemoryEffectInstanceGetSymbolRef
+  mlirMemoryEffectInstanceGetValue
+  mlirMemoryEffectsAllocateGet
+  mlirMemoryEffectsFreeGet
   mlirMemoryEffectsOpInterfaceAttachFallbackModel
+  mlirMemoryEffectsOpInterfaceGetEffects
   mlirMemoryEffectsOpInterfaceTypeID
+  mlirMemoryEffectsReadGet
+  mlirMemoryEffectsWriteGet
   mlirMergeSymbolsIntoFromClone
   mlirModuleCreateEmpty
   mlirModuleCreateParse
@@ -860,6 +890,7 @@ EXPORTS
   mlirOperationImplementsInterface
   mlirOperationImplementsInterfaceStatic
   mlirOperationIsBeforeInBlock
+  mlirOperationIsStructurallyEquivalent
   mlirOperationMoveAfter
   mlirOperationMoveBefore
   mlirOperationNameHasTrait
@@ -884,6 +915,7 @@ EXPORTS
   mlirOperationStateAddSuccessors
   mlirOperationStateEnableResultTypeInference
   mlirOperationStateGet
+  mlirOperationStructuralHashValue
   mlirOperationVerify
   mlirOperationWalk
   mlirOperationWriteBytecode
@@ -983,6 +1015,8 @@ EXPORTS
   mlirRewriterBaseReplaceOpUsesWithinBlock
   mlirRewriterBaseReplaceOpWithOperation
   mlirRewriterBaseReplaceOpWithValues
+  mlirRewriterBaseRestoreInsertionPoint
+  mlirRewriterBaseSaveInsertionPoint
   mlirRewriterBaseSetInsertionPointAfter
   mlirRewriterBaseSetInsertionPointAfterValue
   mlirRewriterBaseSetInsertionPointBefore
@@ -1004,6 +1038,7 @@ EXPORTS
   mlirShapedTypeIsStaticDim
   mlirShapedTypeIsStaticSize
   mlirShapedTypeIsStaticStrideOrOffset
+  mlirSideEffectsDefaultResourceGet
   mlirSimplifyAffineExpr
   mlirSparseElementsAttrGetIndices
   mlirSparseElementsAttrGetTypeID
@@ -1087,7 +1122,12 @@ EXPORTS
   mlirTypeAttrGetName
   mlirTypeAttrGetTypeID
   mlirTypeAttrGetValue
+  mlirTypeConverterAdd1ToNConversion
+  mlirTypeConverterAdd1ToNTargetMaterialization
   mlirTypeConverterAddConversion
+  mlirTypeConverterAddSourceMaterialization
+  mlirTypeConverterAddTargetMaterialization
+  mlirTypeConverterConversionResultsAppend
   mlirTypeConverterConvertType
   mlirTypeConverterCreate
   mlirTypeConverterDestroy
@@ -1118,6 +1158,7 @@ EXPORTS
   mlirTypeIsAFloat8E4M3FNUZ
   mlirTypeIsAFloat8E5M2
   mlirTypeIsAFloat8E5M2FNUZ
+  mlirTypeIsAFloat8E5M3FNU
   mlirTypeIsAFloat8E8M0FNU
   mlirTypeIsAFunction
   mlirTypeIsAGPUAsyncTokenType
@@ -1187,6 +1228,7 @@ EXPORTS
   mlirValuePrintAsOperand
   mlirValueReplaceAllUsesExcept
   mlirValueReplaceAllUsesOfWith
+  mlirValueReplaceUsesWithIf
   mlirValueSetType
   mlirVectorTypeGet
   mlirVectorTypeGetChecked

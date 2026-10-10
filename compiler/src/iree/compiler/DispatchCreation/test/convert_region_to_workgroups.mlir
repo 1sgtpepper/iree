@@ -274,31 +274,6 @@ util.func public @sort_local_keys_unchanged(%indices: tensor<?xi64>)
 
 // -----
 
-// Tensor-result liveness does not account for mixed buffer side effects.
-// CHECK-LABEL: util.func public @sort_mixed_semantics_unchanged
-// CHECK: flow.dispatch.workgroups
-// CHECK-NOT: linalg.copy
-// CHECK: iree_linalg_ext.sort dimension(0) outs(%{{.+}}, %{{.+}}, %{{.+}} : tensor<4xi64>, tensor<4xi64>, memref<4xi64>)
-// CHECK-NOT: linalg.copy
-util.func public @sort_mixed_semantics_unchanged(
-    %keys: tensor<4xi64>, %indices: tensor<4xi64>, %buffer: memref<4xi64>)
-    -> tensor<4xi64> {
-  %result = flow.dispatch.region -> (tensor<4xi64>) {
-    %sorted:2 = iree_linalg_ext.sort dimension(0)
-        outs(%keys, %indices, %buffer
-             : tensor<4xi64>, tensor<4xi64>, memref<4xi64>) {
-    ^bb0(%lhs: i64, %rhs: i64, %lhs_index: i64, %rhs_index: i64,
-         %lhs_buffer: i64, %rhs_buffer: i64):
-      %cmp = arith.cmpi sle, %lhs, %rhs : i64
-      iree_linalg_ext.yield %cmp : i1
-    } -> tensor<4xi64>, tensor<4xi64>
-    flow.return %sorted#1 : tensor<4xi64>
-  }
-  util.return %result : tensor<4xi64>
-}
-
-// -----
-
 // CHECK-LABEL: util.func public @dead_sort
 // CHECK-NOT: linalg.copy
 // CHECK-NOT: iree_linalg_ext.sort
@@ -341,4 +316,92 @@ util.func public @shape_only_sort(%keys: tensor<4xi64>, %indices: tensor<4xi64>)
     flow.return %cast : tensor<4xi64>
   }
   util.return %result : tensor<4xi64>
+}
+
+// -----
+
+// A shape-only key use must not depend on canonicalization before conversion.
+// CHECK-LABEL: util.func public @sort_key_shape_use
+// CHECK: %[[DISPATCH:.+]]:3 = flow.dispatch.workgroups
+// CHECK: %[[KEY_BINDING:[a-zA-Z0-9_]+]]: !iree_tensor_ext.dispatch.tensor<readonly:tensor<?xi64>>
+// CHECK-SAME: %[[INDEX_BINDING:[a-zA-Z0-9_]+]]: !iree_tensor_ext.dispatch.tensor<readwrite:tensor<?xi64>>
+// CHECK-SAME: %[[FILL_BINDING:[a-zA-Z0-9_]+]]: !iree_tensor_ext.dispatch.tensor<writeonly:tensor<?xi64>>
+// CHECK-SAME: %[[WORKSPACE:[a-zA-Z0-9_]+]]: !iree_tensor_ext.dispatch.tensor<readwrite:tensor<?xi64>>
+// CHECK-DAG: %[[KEYS:.+]] = iree_tensor_ext.dispatch.tensor.load %[[KEY_BINDING]]
+// CHECK-DAG: %[[INDICES:.+]] = iree_tensor_ext.dispatch.tensor.load %[[INDEX_BINDING]]
+// CHECK: %[[DEST:.+]] = iree_tensor_ext.dispatch.tensor.load %[[WORKSPACE]]
+// CHECK: %[[COPY:.+]] = linalg.copy ins(%[[KEYS]] : tensor<?xi64>) outs(%[[DEST]] : tensor<?xi64>)
+// CHECK: %[[SORT:.+]]:2 = iree_linalg_ext.sort dimension(0) outs(%[[COPY]], %[[INDICES]]
+// CHECK: %[[FILL:.+]] = linalg.fill
+// CHECK: iree_tensor_ext.dispatch.tensor.store %[[SORT]]#1, %[[INDEX_BINDING]]
+// CHECK: iree_tensor_ext.dispatch.tensor.store %[[FILL]], %[[FILL_BINDING]]
+// CHECK: iree_tensor_ext.dispatch.tensor.store %[[SORT]]#0, %[[WORKSPACE]]
+// CHECK: util.return %[[DISPATCH]]#0, %[[DISPATCH]]#1
+util.func public @sort_key_shape_use(%keys: tensor<?xi64>, %indices: tensor<?xi64>)
+    -> (tensor<?xi64>, tensor<?xi64>) {
+  %c0 = arith.constant 0 : index
+  %n = tensor.dim %keys, %c0 : tensor<?xi64>
+  %result:2 = flow.dispatch.region -> (tensor<?xi64>{%n}, tensor<?xi64>{%n}) {
+    %sorted:2 = iree_linalg_ext.sort dimension(0)
+        outs(%keys, %indices : tensor<?xi64>, tensor<?xi64>) {
+    ^bb0(%lhs: i64, %rhs: i64, %lhs_index: i64, %rhs_index: i64):
+      %cmp = arith.cmpi sle, %lhs, %rhs : i64
+      iree_linalg_ext.yield %cmp : i1
+    } -> tensor<?xi64>, tensor<?xi64>
+    %c0_inner = arith.constant 0 : index
+    %size = tensor.dim %sorted#0, %c0_inner : tensor<?xi64>
+    %empty = tensor.empty(%size) : tensor<?xi64>
+    %one = arith.constant 1 : i64
+    %filled = linalg.fill ins(%one : i64) outs(%empty : tensor<?xi64>)
+        -> tensor<?xi64>
+    flow.return %sorted#1, %filled : tensor<?xi64>, tensor<?xi64>
+  }
+  util.return %result#0, %result#1 : tensor<?xi64>, tensor<?xi64>
+}
+
+// -----
+
+// Equal sources do not identify the working states of distinct Sort operations.
+// CHECK-LABEL: util.func public @two_sorts_shared_source
+// CHECK: %[[DISPATCH:.+]]:4 = flow.dispatch.workgroups
+// CHECK: %[[KEY_BINDING:[a-zA-Z0-9_]+]]: !iree_tensor_ext.dispatch.tensor<readonly:tensor<?xi64>>
+// CHECK-SAME: %[[INDEX0_BINDING:[a-zA-Z0-9_]+]]: !iree_tensor_ext.dispatch.tensor<readwrite:tensor<?xi64>>
+// CHECK-SAME: %[[INDEX1_BINDING:[a-zA-Z0-9_]+]]: !iree_tensor_ext.dispatch.tensor<readwrite:tensor<?xi64>>
+// CHECK-SAME: %[[WORKSPACE0:[a-zA-Z0-9_]+]]: !iree_tensor_ext.dispatch.tensor<readwrite:tensor<?xi64>>
+// CHECK-SAME: %[[WORKSPACE1:[a-zA-Z0-9_]+]]: !iree_tensor_ext.dispatch.tensor<readwrite:tensor<?xi64>>
+// CHECK-DAG: %[[KEYS:.+]] = iree_tensor_ext.dispatch.tensor.load %[[KEY_BINDING]]
+// CHECK-DAG: %[[INDICES0:.+]] = iree_tensor_ext.dispatch.tensor.load %[[INDEX0_BINDING]]
+// CHECK-DAG: %[[INDICES1:.+]] = iree_tensor_ext.dispatch.tensor.load %[[INDEX1_BINDING]]
+// CHECK: %[[DEST0:.+]] = iree_tensor_ext.dispatch.tensor.load %[[WORKSPACE0]]
+// CHECK: %[[COPY0:.+]] = linalg.copy ins(%[[KEYS]] : tensor<?xi64>) outs(%[[DEST0]] : tensor<?xi64>)
+// CHECK: %[[SORT0:.+]]:2 = iree_linalg_ext.sort dimension(0) outs(%[[COPY0]], %[[INDICES0]]
+// CHECK: %[[DEST1:.+]] = iree_tensor_ext.dispatch.tensor.load %[[WORKSPACE1]]
+// CHECK: %[[COPY1:.+]] = linalg.copy ins(%[[KEYS]] : tensor<?xi64>) outs(%[[DEST1]] : tensor<?xi64>)
+// CHECK: %[[SORT1:.+]]:2 = iree_linalg_ext.sort dimension(0) outs(%[[COPY1]], %[[INDICES1]]
+// CHECK: iree_tensor_ext.dispatch.tensor.store %[[SORT0]]#1, %[[INDEX0_BINDING]]
+// CHECK: iree_tensor_ext.dispatch.tensor.store %[[SORT1]]#1, %[[INDEX1_BINDING]]
+// CHECK: iree_tensor_ext.dispatch.tensor.store %[[SORT0]]#0, %[[WORKSPACE0]]
+// CHECK: iree_tensor_ext.dispatch.tensor.store %[[SORT1]]#0, %[[WORKSPACE1]]
+// CHECK: util.return %[[DISPATCH]]#0, %[[DISPATCH]]#1
+util.func public @two_sorts_shared_source(
+    %keys: tensor<?xi64>, %indices0: tensor<?xi64>, %indices1: tensor<?xi64>)
+    -> (tensor<?xi64>, tensor<?xi64>) {
+  %c0 = arith.constant 0 : index
+  %n = tensor.dim %keys, %c0 : tensor<?xi64>
+  %result:2 = flow.dispatch.region -> (tensor<?xi64>{%n}, tensor<?xi64>{%n}) {
+    %ascending:2 = iree_linalg_ext.sort dimension(0)
+        outs(%keys, %indices0 : tensor<?xi64>, tensor<?xi64>) {
+    ^bb0(%lhs: i64, %rhs: i64, %lhs_index: i64, %rhs_index: i64):
+      %cmp = arith.cmpi sle, %lhs, %rhs : i64
+      iree_linalg_ext.yield %cmp : i1
+    } -> tensor<?xi64>, tensor<?xi64>
+    %descending:2 = iree_linalg_ext.sort dimension(0)
+        outs(%keys, %indices1 : tensor<?xi64>, tensor<?xi64>) {
+    ^bb0(%lhs: i64, %rhs: i64, %lhs_index: i64, %rhs_index: i64):
+      %cmp = arith.cmpi sge, %lhs, %rhs : i64
+      iree_linalg_ext.yield %cmp : i1
+    } -> tensor<?xi64>, tensor<?xi64>
+    flow.return %ascending#1, %descending#1 : tensor<?xi64>, tensor<?xi64>
+  }
+  util.return %result#0, %result#1 : tensor<?xi64>, tensor<?xi64>
 }

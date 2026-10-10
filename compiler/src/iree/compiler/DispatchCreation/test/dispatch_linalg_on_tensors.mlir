@@ -2,6 +2,7 @@
 
 // CHECK-LABEL: util.func public @argsort_unused_comparator_workspace(
 // CHECK-SAME: %[[INPUT:[a-zA-Z0-9_]+]]: tensor<?xi64>
+// CHECK: tensor.dim %[[INPUT]]
 // CHECK: %[[DISPATCH:.+]]:2 = flow.dispatch.workgroups
 // CHECK: %[[KEY_BINDING:[a-zA-Z0-9_]+]]: !iree_tensor_ext.dispatch.tensor<readonly:tensor<?xi64>>
 // CHECK-SAME: %[[INDEX_BINDING:[a-zA-Z0-9_]+]]: !iree_tensor_ext.dispatch.tensor<readwrite:tensor<?xi64>>

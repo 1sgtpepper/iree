@@ -87,11 +87,8 @@ convertDispatchRegionWithSortWorkspaces(IREE::Flow::DispatchRegionOp &regionOp,
         continue;
       }
       rewriter.setInsertionPoint(regionOp);
-      SmallVector<Value> dims;
-      if (failed(IREE::Flow::getOptimizedDynamicResultDims(rewriter, source,
-                                                           dims))) {
-        continue;
-      }
+      auto dims = IREE::Util::buildDynamicDimsForValue(sortOp.getLoc(), source,
+                                                       rewriter);
       rewriter.setInsertionPoint(sortOp);
       auto workspace = tensor::EmptyOp::create(
           rewriter, sortOp.getLoc(), cast<RankedTensorType>(source.getType()),

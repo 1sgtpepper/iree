@@ -1,0 +1,166 @@
+# Copyright 2026 The IREE Authors
+#
+# Licensed under the Apache License v2.0 with LLVM Exceptions.
+# See https://llvm.org/LICENSE.txt for license information.
+# SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
+
+name: Validate Sort workspace destinations
+
+on:
+  push:
+    branches:
+      - validation/sort-workspace-destinations
+
+permissions:
+  actions: read
+  contents: read
+
+concurrency:
+  group: validate-sort-workspace-destinations
+  cancel-in-progress: false
+
+env:
+  SOURCE_SHA: 3316c5faa04a20ba1762ee8079aa9b530c97e51b
+  BASE_SHA: 6ec253ad4e259ad256c8a226f7a7a330debf937c
+  SUBMITTED_SHA: 146ea2a4b2332b194e5e37db137672a8799a4f6c
+  LLVM_SHA: 53e39b225bd164efeae02c9a0721021469d5bc67
+
+jobs:
+  lint:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out exact candidate source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ env.SOURCE_SHA }}
+          persist-credentials: false
+      - name: Verify source revision
+        run: test "$(git rev-parse HEAD)" = "${SOURCE_SHA}"
+      - name: Initialize compiler submodule
+        run: git submodule update --init --depth=1 third_party/llvm-project
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+      - name: Run repository lint checks
+        uses: pre-commit/action@2c7b3805fd2a0fd8c1884dcaebf91fc102a13ecd # v3.0.1
+  differential_tests:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    container:
+      image: ghcr.io/iree-org/cpubuilder_ubuntu_jammy@sha256:78a558b999b230f7e1da376639e14b44f095f30f1777d6a272ba48c0bbdd4ccb
+      options: --mount type=tmpfs,destination=/dev/shm
+      env:
+        SANDBOX_BASE: /dev/shm
+    defaults:
+      run:
+        shell: bash
+    env:
+      BAZEL_DISK_CACHE: /tmp/iree-bazel-disk-cache
+    steps:
+      - name: Check out exact candidate source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ env.SOURCE_SHA }}
+          submodules: true
+          persist-credentials: false
+      - name: Verify revisions and stage validation inputs
+        run: |
+          git config --global --add safe.directory "${GITHUB_WORKSPACE}"
+          test "$(git rev-parse HEAD)" = "${SOURCE_SHA}"
+          test "$(git -C third_party/llvm-project rev-parse HEAD)" = "${LLVM_SHA}"
+          git fetch --no-tags --depth=1 origin "${BASE_SHA}" "${SUBMITTED_SHA}" "${GITHUB_SHA}"
+          git show "${GITHUB_SHA}:validation/compare_sort_workspaces.py" > "${RUNNER_TEMP}/compare_sort_workspaces.py"
+          git show "${GITHUB_SHA}:validation/clone-sort-workspaces.cpp" > "${RUNNER_TEMP}/clone-sort-workspaces.cpp"
+          echo "CLONE_EXPERIMENT=${RUNNER_TEMP}/clone-sort-workspaces.cpp" >> "${GITHUB_ENV}"
+      - name: Restore existing Bazel disk cache
+        id: cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        continue-on-error: true
+        with:
+          path: ${{ env.BAZEL_DISK_CACHE }}
+          key: sort-workspace-v1-${{ runner.os }}-${{ hashFiles('MODULE.bazel') }}-${{ env.SOURCE_SHA }}
+          restore-keys: |
+            sort-workspace-v1-${{ runner.os }}-${{ hashFiles('MODULE.bazel') }}-
+            argsort-required-tie-v1-${{ runner.os }}-${{ hashFiles('MODULE.bazel') }}-
+      - name: Install Python requirements
+        run: python3 -m pip install -r runtime/bindings/python/iree/runtime/build_requirements.txt
+      - name: Install Bazelisk
+        run: ./build_tools/bazel/install_bazelisk.sh 1.21.0
+      - name: Compare exact sources and smaller clone alternative
+        run: python3 "${RUNNER_TEMP}/compare_sort_workspaces.py"
+      - name: Download matching clang-tidy
+        uses: dawidd6/action-download-artifact@d63b86af1b34672e53c440b1b83979861906bad7 # v24
+        with:
+          repo: iree-org/iree
+          run_id: 32944069152
+          name: iree-clang-tidy-linux-x86_64
+          path: /tmp/iree-clang-tidy
+      - name: Analyze changed C++ lines
+        run: |
+          test "$(cat /tmp/iree-clang-tidy/llvm-project-revision.txt)" = "${LLVM_SHA}"
+          chmod +x /tmp/iree-clang-tidy/clang-tidy
+          bazel --noworkspace_rc --bazelrc=build_tools/bazel/iree.bazelrc aquery \
+            --sandbox_base="${SANDBOX_BASE}" --disk_cache="${BAZEL_DISK_CACHE}" \
+            --config=generic_clang_ci --noremote_upload_local_results \
+            --iree_compiler_plugins=hal_target_llvm_cpu,hal_target_local \
+            --iree_drivers=local-task --include_param_files --output=jsonproto \
+            'mnemonic("CppCompile", //compiler/src/iree/compiler/DispatchCreation:DispatchCreation)' \
+            > "${RUNNER_TEMP}/sort-compile-actions.json"
+          bazel --noworkspace_rc --bazelrc=build_tools/bazel/iree.bazelrc info execution_root \
+            > "${RUNNER_TEMP}/sort-execution-root"
+          python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+          import re
+          import subprocess
+          source = 'compiler/src/iree/compiler/DispatchCreation/ConvertDispatchRegionsToWorkgroups.cpp'
+          temp = Path(os.environ['RUNNER_TEMP'])
+          execution_root = (temp / 'sort-execution-root').read_text().strip()
+          actions = json.loads((temp / 'sort-compile-actions.json').read_text())['actions']
+          matches = []
+          for action in actions:
+              params = {p['execPath']: p['arguments'] for p in action.get('paramFiles', [])}
+              args = []
+              for arg in action['arguments']:
+                  args.extend(params[arg[1:]] if arg.startswith('@') else [arg])
+              if source in args:
+                  matches.append(args)
+          assert len(matches) == 1, len(matches)
+          db = temp / 'sort-compilation-database'
+          db.mkdir(exist_ok=True)
+          file = str(Path(execution_root) / source)
+          (db / 'compile_commands.json').write_text(json.dumps([
+              {'directory': execution_root, 'file': file, 'arguments': matches[0]}]))
+          diff = subprocess.check_output(['git', 'diff', '--unified=0', os.environ['BASE_SHA'],
+                  os.environ['SOURCE_SHA'], '--', source], text=True)
+          ranges = []
+          for start, count in re.findall(r'^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@', diff, re.M):
+              start, count = int(start), int(count) if count else 1
+              if count:
+                  ranges.append([start, start + count - 1])
+          assert ranges
+          resource = subprocess.check_output(['clang', '-print-resource-dir'], text=True).strip()
+          command = ['/tmp/iree-clang-tidy/clang-tidy', file, '-p', str(db),
+              '--config-file=' + str(Path(os.environ['GITHUB_WORKSPACE']) / 'compiler/.clang-tidy'),
+              '--line-filter=' + json.dumps([{'name': source, 'lines': ranges}]),
+              '--extra-arg=-resource-dir=' + resource, '--warnings-as-errors=*']
+          log = temp / 'sort-workspace-evidence' / 'clang-tidy.log'
+          with log.open('w') as output:
+              result = subprocess.run(command, stdout=output, stderr=subprocess.STDOUT, cwd=execution_root)
+          print(log.read_text())
+          result.check_returncode()
+          PY
+      - name: Save validation evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: sort-workspace-evidence
+          path: ${{ runner.temp }}/sort-workspace-evidence
+          if-no-files-found: warn
+      - name: Save compiler cache
+        if: always() && steps.cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        continue-on-error: true
+        with:
+          path: ${{ env.BAZEL_DISK_CACHE }}
+          key: ${{ steps.cache.outputs.cache-primary-key }}

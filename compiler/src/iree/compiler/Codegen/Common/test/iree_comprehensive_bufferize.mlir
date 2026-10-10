@@ -56,6 +56,95 @@ func.func @sort_dynamic_output_workspace() {
 
 // -----
 
+// Both Sorts start from the original keys and use independent output storage.
+#pipeline_layout = #hal.pipeline.layout<constants = 1, bindings = [
+  #hal.pipeline.binding<storage_buffer>,
+  #hal.pipeline.binding<storage_buffer>,
+  #hal.pipeline.binding<storage_buffer>,
+  #hal.pipeline.binding<storage_buffer>,
+  #hal.pipeline.binding<storage_buffer>
+]>
+func.func @two_sorts_dynamic_output_workspaces() {
+  %n = hal.interface.constant.load layout(#pipeline_layout) ordinal(0) : index
+  %keys_binding = hal.interface.binding.subspan layout(#pipeline_layout) binding(0)
+      : !iree_tensor_ext.dispatch.tensor<readonly:tensor<?xi64>>{%n}
+  %indices0_binding = hal.interface.binding.subspan layout(#pipeline_layout) binding(1)
+      : !iree_tensor_ext.dispatch.tensor<readwrite:tensor<?xi64>>{%n}
+  %indices1_binding = hal.interface.binding.subspan layout(#pipeline_layout) binding(2)
+      : !iree_tensor_ext.dispatch.tensor<readwrite:tensor<?xi64>>{%n}
+  %workspace0_binding = hal.interface.binding.subspan layout(#pipeline_layout) binding(3)
+      : !iree_tensor_ext.dispatch.tensor<readwrite:tensor<?xi64>>{%n}
+  %workspace1_binding = hal.interface.binding.subspan layout(#pipeline_layout) binding(4)
+      : !iree_tensor_ext.dispatch.tensor<readwrite:tensor<?xi64>>{%n}
+  %keys = iree_tensor_ext.dispatch.tensor.load %keys_binding,
+      offsets = [0], sizes = [%n], strides = [1]
+      : !iree_tensor_ext.dispatch.tensor<readonly:tensor<?xi64>>{%n} -> tensor<?xi64>
+  %indices0 = iree_tensor_ext.dispatch.tensor.load %indices0_binding,
+      offsets = [0], sizes = [%n], strides = [1]
+      : !iree_tensor_ext.dispatch.tensor<readwrite:tensor<?xi64>>{%n} -> tensor<?xi64>
+  %indices1 = iree_tensor_ext.dispatch.tensor.load %indices1_binding,
+      offsets = [0], sizes = [%n], strides = [1]
+      : !iree_tensor_ext.dispatch.tensor<readwrite:tensor<?xi64>>{%n} -> tensor<?xi64>
+  %workspace0 = iree_tensor_ext.dispatch.tensor.load %workspace0_binding,
+      offsets = [0], sizes = [%n], strides = [1]
+      : !iree_tensor_ext.dispatch.tensor<readwrite:tensor<?xi64>>{%n} -> tensor<?xi64>
+  %copy0 = linalg.copy ins(%keys : tensor<?xi64>) outs(%workspace0 : tensor<?xi64>)
+      -> tensor<?xi64>
+  %ascending:2 = iree_linalg_ext.sort dimension(0)
+      outs(%copy0, %indices0 : tensor<?xi64>, tensor<?xi64>) {
+  ^bb0(%lhs: i64, %rhs: i64, %lhs_index: i64, %rhs_index: i64):
+    %cmp = arith.cmpi sle, %lhs, %rhs : i64
+    iree_linalg_ext.yield %cmp : i1
+  } -> tensor<?xi64>, tensor<?xi64>
+  %workspace1 = iree_tensor_ext.dispatch.tensor.load %workspace1_binding,
+      offsets = [0], sizes = [%n], strides = [1]
+      : !iree_tensor_ext.dispatch.tensor<readwrite:tensor<?xi64>>{%n} -> tensor<?xi64>
+  %copy1 = linalg.copy ins(%keys : tensor<?xi64>) outs(%workspace1 : tensor<?xi64>)
+      -> tensor<?xi64>
+  %descending:2 = iree_linalg_ext.sort dimension(0)
+      outs(%copy1, %indices1 : tensor<?xi64>, tensor<?xi64>) {
+  ^bb0(%lhs: i64, %rhs: i64, %lhs_index: i64, %rhs_index: i64):
+    %cmp = arith.cmpi sge, %lhs, %rhs : i64
+    iree_linalg_ext.yield %cmp : i1
+  } -> tensor<?xi64>, tensor<?xi64>
+  iree_tensor_ext.dispatch.tensor.store %ascending#1, %indices0_binding,
+      offsets = [0], sizes = [%n], strides = [1]
+      : tensor<?xi64> -> !iree_tensor_ext.dispatch.tensor<readwrite:tensor<?xi64>>{%n}
+  iree_tensor_ext.dispatch.tensor.store %descending#1, %indices1_binding,
+      offsets = [0], sizes = [%n], strides = [1]
+      : tensor<?xi64> -> !iree_tensor_ext.dispatch.tensor<readwrite:tensor<?xi64>>{%n}
+  iree_tensor_ext.dispatch.tensor.store %ascending#0, %workspace0_binding,
+      offsets = [0], sizes = [%n], strides = [1]
+      : tensor<?xi64> -> !iree_tensor_ext.dispatch.tensor<readwrite:tensor<?xi64>>{%n}
+  iree_tensor_ext.dispatch.tensor.store %descending#0, %workspace1_binding,
+      offsets = [0], sizes = [%n], strides = [1]
+      : tensor<?xi64> -> !iree_tensor_ext.dispatch.tensor<readwrite:tensor<?xi64>>{%n}
+  return
+}
+// CHECK-LABEL: func.func @two_sorts_dynamic_output_workspaces
+// CHECK-NOT: memref.alloc
+// CHECK: %[[KEYS:.+]] = hal.interface.binding.subspan layout({{.+}}) binding(0)
+// CHECK-NOT: memref.alloc
+// CHECK: %[[INDICES0:.+]] = hal.interface.binding.subspan layout({{.+}}) binding(1)
+// CHECK-NOT: memref.alloc
+// CHECK: %[[INDICES1:.+]] = hal.interface.binding.subspan layout({{.+}}) binding(2)
+// CHECK-NOT: memref.alloc
+// CHECK: %[[WORKSPACE0:.+]] = hal.interface.binding.subspan layout({{.+}}) binding(3)
+// CHECK-NOT: memref.alloc
+// CHECK: %[[WORKSPACE1:.+]] = hal.interface.binding.subspan layout({{.+}}) binding(4)
+// CHECK-NOT: memref.alloc
+// CHECK: linalg.copy ins(%[[KEYS]] : memref<?xi64{{.*}}>) outs(%[[WORKSPACE0]] : memref<?xi64{{.*}}>)
+// CHECK-NOT: memref.alloc
+// CHECK: iree_linalg_ext.sort dimension(0) outs(%[[WORKSPACE0]], %[[INDICES0]] : memref<?xi64{{.*}}>, memref<?xi64{{.*}}>)
+// CHECK-NOT: memref.alloc
+// CHECK: linalg.copy ins(%[[KEYS]] : memref<?xi64{{.*}}>) outs(%[[WORKSPACE1]] : memref<?xi64{{.*}}>)
+// CHECK-NOT: memref.alloc
+// CHECK: iree_linalg_ext.sort dimension(0) outs(%[[WORKSPACE1]], %[[INDICES1]] : memref<?xi64{{.*}}>, memref<?xi64{{.*}}>)
+// CHECK-NOT: memref.alloc
+// CHECK: return
+
+// -----
+
 #pipeline_layout = #hal.pipeline.layout<constants = 3, bindings = [
   #hal.pipeline.binding<storage_buffer>,
   #hal.pipeline.binding<storage_buffer>,

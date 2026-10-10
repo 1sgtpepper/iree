@@ -25,6 +25,7 @@ out.mkdir(exist_ok=True)
 report = {'candidate': source, 'base': base, 'submitted': submitted, 'llvm': llvm,
           'runs': [], 'fixture_hashes': {}}
 cpp = Path('compiler/src/iree/compiler/DispatchCreation/ConvertDispatchRegionsToWorkgroups.cpp')
+bufferization_cpp = Path('compiler/src/iree/compiler/Codegen/Interfaces/BufferizationInterfaces.cpp')
 fixtures = ['tests/e2e/regression/' + name + '.mlir' for name in (
     'argsort_dynamic', 'argsort_preserve_input_dynamic',
     'argsort_comparator_lanes_dynamic', 'argsort_views_dynamic')]
@@ -71,7 +72,8 @@ def command(name, args, targets=()):
             shutil.copyfile(original, logs / (test + '.log'))
     row = {'name': name, 'command': args, 'exit_status': status,
            'source_sha': subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip(),
-           'production_sha256': hashlib.sha256(cpp.read_bytes()).hexdigest()}
+           'production_sha256': hashlib.sha256(cpp.read_bytes()).hexdigest(),
+           'bufferization_sha256': hashlib.sha256(bufferization_cpp.read_bytes()).hexdigest()}
     report['runs'].append(row)
     save_report()
     return status
@@ -160,6 +162,32 @@ isolated_runtime_probes('clone-experiment')
 if command('clone-ir-tools', bazel + ['build'] + flags + ['//tools:iree-opt']) == 0:
     command('clone-experiment-flow', [str(Path('bazel-bin/tools/iree-opt')),
             fixtures[2], '--iree-dispatch-creation-pipeline', '--mlir-disable-threading'])
+    command('clone-experiment-conversion', ['bazel-bin/tools/iree-opt',
+            'compiler/src/iree/compiler/DispatchCreation/test/convert_region_to_workgroups.mlir',
+            '--pass-pipeline=builtin.module(util.func(iree-dispatch-creation-convert-dispatch-regions-to-workgroups,iree-flow-canonicalize,cse))',
+            '--split-input-file'])
+
+# A narrower exemption can permit identical init roles of one Sort, but it
+# cannot resolve writes in one Sort against original-value reads in another.
+model = '''struct LinalgExtOpInterface
+    : bufferization::DstBufferizableOpInterfaceExternalModel<
+          LinalgExtOpInterface<OpTy>, OpTy> {
+'''
+bufferization_source = bufferization_cpp.read_text()
+assert bufferization_source.count(model) == 1
+bufferization_cpp.write_text(bufferization_source.replace(model, model + '''
+  bool isNotConflicting(OpOperand *read, OpOperand *write,
+                        const AnalysisState &) const {
+    return isa<IREE::LinalgExt::SortOp>(read->getOwner()) &&
+           read->getOwner() == write->getOwner() &&
+           read->get() == write->get();
+  }
+'''))
+if command('clone-same-sort-exemption-tools', bazel + ['build'] + flags + ['//tools:iree-opt']) == 0:
+    command('clone-same-sort-exemption-analysis', ['bazel-bin/tools/iree-opt', os.environ['SHARED_DESTINATION_PROBE'],
+            '--pass-pipeline=builtin.module(func.func(iree-codegen-iree-comprehensive-bufferize{test-analysis-only=true print-conflicts=true}))'])
+    command('clone-same-sort-exemption-bufferization', ['bazel-bin/tools/iree-opt', os.environ['SHARED_DESTINATION_PROBE'],
+            '--pass-pipeline=builtin.module(func.func(iree-codegen-iree-comprehensive-bufferize,canonicalize,cse,canonicalize))'])
 
 checkout(source)
 original = cpp.read_text()
@@ -182,6 +210,13 @@ cpp.write_text(original.replace(before, '''SmallVector<Value> dims;
 command('optimized-shape-helper-control', bazel + ['test'] + flags +
         ['--keep_going', '--test_output=errors', compiler[2], compiler[3]],
         [compiler[2], compiler[3]])
+
+checkout(source)
+before = '!llvm::all_of(result.getUsers(), llvm::IsaPred<tensor::DimOp>)'
+assert original.count(before) == 1
+cpp.write_text(original.replace(before, '!result.use_empty()'))
+command('shape-use-empty-guard-control', bazel + ['test'] + flags +
+        ['--test_output=errors', compiler[2]], [compiler[2]])
 
 checkout(source)
 before = 'linalg::CopyOp::create(rewriter, sortOp.getLoc(), source, workspace);'

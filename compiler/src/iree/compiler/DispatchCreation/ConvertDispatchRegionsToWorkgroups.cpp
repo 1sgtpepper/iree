@@ -59,9 +59,6 @@ convertDispatchRegionWithSortWorkspaces(IREE::Flow::DispatchRegionOp &regionOp,
 
   for (auto sortOp :
        regionOp.getBody().front().getOps<IREE::LinalgExt::SortOp>()) {
-    if (!sortOp.hasPureTensorSemantics()) {
-      continue;
-    }
     bool hasLiveResult = llvm::any_of(sortOp.getResults(), [&](Value result) {
       return llvm::any_of(result.getUses(), [&](OpOperand &use) {
         if (isa<tensor::DimOp>(use.getOwner())) {
@@ -77,8 +74,9 @@ convertDispatchRegionWithSortWorkspaces(IREE::Flow::DispatchRegionOp &regionOp,
     auto comparatorArgs = sortOp.getRegion().front().getArguments();
     for (auto result : sortOp.getResults()) {
       unsigned index = result.getResultNumber();
-      if (!result.use_empty() || (comparatorArgs[2 * index].use_empty() &&
-                                  comparatorArgs[2 * index + 1].use_empty())) {
+      if (!llvm::all_of(result.getUsers(), llvm::IsaPred<tensor::DimOp>) ||
+          (comparatorArgs[2 * index].use_empty() &&
+           comparatorArgs[2 * index + 1].use_empty())) {
         continue;
       }
       OpOperand &init = *sortOp.getDpsInitOperand(index);
@@ -86,6 +84,8 @@ convertDispatchRegionWithSortWorkspaces(IREE::Flow::DispatchRegionOp &regionOp,
       if (regionOp.getBody().isAncestor(source.getParentRegion())) {
         continue;
       }
+      // Shape queries need only the init's shape, not sorted data.
+      rewriter.replaceAllUsesWith(result, source);
       rewriter.setInsertionPoint(regionOp);
       auto dims = IREE::Util::buildDynamicDimsForValue(sortOp.getLoc(), source,
                                                        rewriter);

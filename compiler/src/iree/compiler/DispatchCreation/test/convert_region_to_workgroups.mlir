@@ -405,3 +405,77 @@ util.func public @two_sorts_shared_source(
   }
   util.return %result#0, %result#1 : tensor<?xi64>, tensor<?xi64>
 }
+
+// -----
+
+// A dead use chain must not create a workspace that keeps Sort alive. Required
+// evaluation in the same dispatch must survive removal of the pure computation.
+util.func private @observe()
+
+// CHECK-LABEL: util.func public @sort_dead_internal_chain
+// CHECK-NOT: iree_linalg_ext.sort
+// CHECK-NOT: linalg.copy
+// CHECK: %[[RESULT:[a-zA-Z0-9_]+]] = flow.dispatch.workgroups
+// CHECK-NOT: iree_linalg_ext.sort
+// CHECK-NOT: linalg.copy
+// CHECK: util.call @observe()
+// CHECK-NOT: iree_linalg_ext.sort
+// CHECK-NOT: linalg.copy
+// CHECK: util.return %[[RESULT]]
+util.func public @sort_dead_internal_chain(
+    %keys: tensor<?xi64>, %indices: tensor<?xi64>, %other: tensor<4xi64>)
+    -> tensor<4xi64> {
+  %c0 = arith.constant 0 : index
+  %n = tensor.dim %indices, %c0 : tensor<?xi64>
+  %result = flow.dispatch.region -> (tensor<4xi64>) {
+    %sorted:2 = iree_linalg_ext.sort dimension(0)
+        outs(%keys, %indices : tensor<?xi64>, tensor<?xi64>) {
+    ^bb0(%lhs: i64, %rhs: i64, %lhs_index: i64, %rhs_index: i64):
+      %cmp = arith.cmpi sle, %lhs, %rhs : i64
+      iree_linalg_ext.yield %cmp : i1
+    } -> tensor<?xi64>, tensor<?xi64>
+    %cast = tensor.cast %sorted#1 : tensor<?xi64> to tensor<?xi64>
+    %dead = tensor.extract_slice %cast[0] [%n] [1]
+        : tensor<?xi64> to tensor<?xi64>
+    util.call @observe() : () -> ()
+    flow.return %other : tensor<4xi64>
+  }
+  util.return %result : tensor<4xi64>
+}
+
+// -----
+
+// Dead comparator users must not introduce a workspace for an unused lane.
+// CHECK-LABEL: util.func public @sort_dead_comparator_user
+// CHECK: %[[DISPATCH:.+]]:2 = flow.dispatch.workgroups
+// CHECK: %[[KEY_BINDING:[a-zA-Z0-9_]+]]: !iree_tensor_ext.dispatch.tensor<readonly:tensor<?xi64>>
+// CHECK-SAME: %[[INDEX_BINDING:[a-zA-Z0-9_]+]]: !iree_tensor_ext.dispatch.tensor<readwrite:tensor<?xi64>>
+// CHECK-SAME: %[[WORKSPACE:[a-zA-Z0-9_]+]]: !iree_tensor_ext.dispatch.tensor<readwrite:tensor<?xi64>>
+// CHECK-DAG: %[[KEYS:.+]] = iree_tensor_ext.dispatch.tensor.load %[[KEY_BINDING]]
+// CHECK-DAG: %[[INDICES:.+]] = iree_tensor_ext.dispatch.tensor.load %[[INDEX_BINDING]]
+// CHECK: %[[DEST:.+]] = iree_tensor_ext.dispatch.tensor.load %[[WORKSPACE]]
+// CHECK: %[[COPY:.+]] = linalg.copy ins(%[[KEYS]] : tensor<?xi64>) outs(%[[DEST]] : tensor<?xi64>)
+// CHECK: %[[SORT:.+]]:2 = iree_linalg_ext.sort dimension(0) outs(%[[COPY]], %[[INDICES]]
+// CHECK-NOT: arith.addi
+// CHECK: iree_tensor_ext.dispatch.tensor.store %[[SORT]]#1, %[[INDEX_BINDING]]
+// CHECK: iree_tensor_ext.dispatch.tensor.store %[[SORT]]#0, %[[WORKSPACE]]
+// CHECK: util.return %[[DISPATCH]]#0
+util.func public @sort_dead_comparator_user(
+    %keys: tensor<?xi64>, %extra: tensor<?xi64>, %indices: tensor<?xi64>)
+    -> tensor<?xi64> {
+  %c0 = arith.constant 0 : index
+  %n = tensor.dim %keys, %c0 : tensor<?xi64>
+  %result = flow.dispatch.region -> (tensor<?xi64>{%n}) {
+    %sorted:3 = iree_linalg_ext.sort dimension(0)
+        outs(%keys, %extra, %indices
+             : tensor<?xi64>, tensor<?xi64>, tensor<?xi64>) {
+    ^bb0(%lhs: i64, %rhs: i64, %lhs_extra: i64, %rhs_extra: i64,
+         %lhs_index: i64, %rhs_index: i64):
+      %dead = arith.addi %lhs_extra, %rhs_extra : i64
+      %cmp = arith.cmpi sle, %lhs, %rhs : i64
+      iree_linalg_ext.yield %cmp : i1
+    } -> tensor<?xi64>, tensor<?xi64>, tensor<?xi64>
+    flow.return %sorted#2 : tensor<?xi64>
+  }
+  util.return %result : tensor<?xi64>
+}

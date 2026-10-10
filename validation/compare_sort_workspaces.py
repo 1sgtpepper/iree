@@ -219,6 +219,13 @@ command('shape-use-empty-guard-control', bazel + ['test'] + flags +
         ['--test_output=errors', compiler[2]], [compiler[2]])
 
 checkout(source)
+before = '  eliminateTriviallyDeadOps(rewriter, regionOp.getBody());\n'
+assert original.count(before) == 1
+cpp.write_text(original.replace(before, ''))
+command('dead-use-cleanup-control', bazel + ['test'] + flags +
+        ['--test_output=errors', compiler[2]], [compiler[2]])
+
+checkout(source)
 before = 'linalg::CopyOp::create(rewriter, sortOp.getLoc(), source, workspace);'
 assert original.count(before) == 1
 modified = original.replace('#include \"mlir/Dialect/Affine/IR/AffineOps.h\"',

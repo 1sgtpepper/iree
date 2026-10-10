@@ -21,6 +21,7 @@
 #include "mlir/Interfaces/FunctionInterfaces.h"
 #include "mlir/Support/LLVM.h"
 #include "mlir/Support/LogicalResult.h"
+#include "mlir/Transforms/RegionUtils.h"
 
 #define DEBUG_TYPE                                                             \
   "iree-dispatch-creation-convert-dispatch-regions-to-workgroups"
@@ -44,10 +45,13 @@ struct ConvertDispatchRegionsToWorkgroupsPass
 static FailureOr<IREE::Flow::DispatchWorkgroupsOp>
 convertDispatchRegionWithSortWorkspaces(IREE::Flow::DispatchRegionOp &regionOp,
                                         RewriterBase &rewriter) {
-  if (!llvm::hasSingleElement(regionOp.getBody())) {
+  if (!llvm::hasSingleElement(regionOp.getBody()) ||
+      llvm::empty(
+          regionOp.getBody().front().getOps<IREE::LinalgExt::SortOp>())) {
     return rewriteFlowDispatchRegionToFlowDispatchWorkgroups(regionOp,
                                                              rewriter);
   }
+  eliminateTriviallyDeadOps(rewriter, regionOp.getBody());
   auto returnOp =
       cast<IREE::Flow::ReturnOp>(regionOp.getBody().front().getTerminator());
   SmallVector<Value> workspaceResults;

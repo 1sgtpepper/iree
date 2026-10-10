@@ -14,7 +14,10 @@ iree_lit_test_suite(
   NAME
     lit
   SRCS
+    "argsort_comparator_lanes_dynamic.mlir"
     "argsort_dynamic.mlir"
+    "argsort_preserve_input_dynamic.mlir"
+    "argsort_views_dynamic.mlir"
     "fill_i64.mlir"
     "force_single_dispatch.mlir"
     "globals.mlir"

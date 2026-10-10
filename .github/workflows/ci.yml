@@ -1,363 +1,164 @@
-# Copyright 2022 The IREE Authors
+# Copyright 2026 The IREE Authors
 #
 # Licensed under the Apache License v2.0 with LLVM Exceptions.
 # See https://llvm.org/LICENSE.txt for license information.
 # SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
-name: CI
-
-# A few notes:
-#
-# Variables:
-# GitHub actions don't have variables or even support normal yaml anchors (they
-# are specially disabled because...reasons?):
-# See https://github.com/github-community/community/discussions/4501
-# https://github.community/t/support-for-yaml-anchors/16128/92
-# https://github.com/actions/runner/issues/1182
-# Neither does it have any contexts that are available everywhere. The
-# top-level `env` field is available in many places, but not all. We already
-# have a "setup" job that every other job depends on, so we leverage that
-# for variables that every other job can use, since that *is* available in all
-# sub-fields of the job.
-# See https://docs.github.com/en/actions/learn-github-actions/contexts#context-availability
-# and https://github.com/community/community/discussions/27370
-#
-# Runner label ordering:
-# - self-hosted always has to be listed first in a runs-on block:
-# https://docs.github.com/en/actions/hosting-your-own-runners/using-self-hosted-runners-in-a-workflow
+name: Validate Sort workspace destinations
 
 on:
   workflow_dispatch:
-  pull_request:
-  push:
-    branches:
-      - main
+
+permissions:
+  actions: read
+  contents: read
 
 concurrency:
-  # A PR number if a pull request and otherwise the commit hash. This cancels
-  # queued and in-progress runs for the same PR (presubmit) or commit
-  # (postsubmit). The workflow name is prepended to avoid conflicts between
-  # different workflows.
-  group: ${{ github.workflow }}-${{ github.event.number || github.sha }}
-  cancel-in-progress: true
+  group: validate-sort-workspace-destinations
+  cancel-in-progress: false
 
-# Jobs are organized into groups and topologically sorted by dependencies
+env:
+  SOURCE_SHA: 3316c5faa04a20ba1762ee8079aa9b530c97e51b
+  BASE_SHA: 6ec253ad4e259ad256c8a226f7a7a330debf937c
+  SUBMITTED_SHA: 146ea2a4b2332b194e5e37db137672a8799a4f6c
+  LLVM_SHA: 53e39b225bd164efeae02c9a0721021469d5bc67
+
 jobs:
-  setup:
-    uses: ./.github/workflows/setup.yml
-
-  ##############################################################################
-  # Runtime builds
-
-  runtime:
-    needs: setup
-    name: "runtime :: ${{ matrix.name }}"
-    if: contains(fromJson(needs.setup.outputs.enabled-jobs), 'runtime')
-    runs-on: ${{ matrix.runs-on }}
+  lint:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out exact candidate source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ env.SOURCE_SHA }}
+          persist-credentials: false
+      - name: Verify source revision
+        run: test "$(git rev-parse HEAD)" = "${SOURCE_SHA}"
+      - name: Initialize compiler submodule
+        run: git submodule update --init --depth=1 third_party/llvm-project
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+      - name: Run repository lint checks
+        uses: pre-commit/action@2c7b3805fd2a0fd8c1884dcaebf91fc102a13ecd # v3.0.1
+  differential_tests:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    container:
+      image: ghcr.io/iree-org/cpubuilder_ubuntu_jammy@sha256:78a558b999b230f7e1da376639e14b44f095f30f1777d6a272ba48c0bbdd4ccb
+      options: --mount type=tmpfs,destination=/dev/shm
+      env:
+        SANDBOX_BASE: /dev/shm
     defaults:
       run:
         shell: bash
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - name: ubuntu-24.04
-            runs-on: ubuntu-24.04
-            driver-options: -DIREE_HAL_DRIVER_CUDA=ON -DIREE_HAL_DRIVER_HIP=ON -DIREE_HAL_DRIVER_VULKAN=ON
-          - name: ubuntu-24.04-arm
-            runs-on: ubuntu-24.04-arm
-            driver-options: -DIREE_HAL_DRIVER_CUDA=ON -DIREE_HAL_DRIVER_HIP=ON -DIREE_HAL_DRIVER_VULKAN=ON
-          - name: windows-2022
-            runs-on: windows-2022
-            driver-options: -DIREE_HAL_DRIVER_CUDA=ON -DIREE_HAL_DRIVER_HIP=ON -DIREE_HAL_DRIVER_VULKAN=ON
-          - name: macos-14
-            runs-on: macos-14
-            driver-options: -DIREE_HAL_DRIVER_METAL=ON -DIREE_HAL_DRIVER_VULKAN=OFF
     env:
-      BUILD_DIR: build-runtime
+      BAZEL_DISK_CACHE: /tmp/iree-bazel-disk-cache
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+      - name: Check out exact candidate source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          python-version: "3.11"
-
-      - name: (Linux) Install requirements
-        if: contains(matrix.name, 'ubuntu')
+          ref: ${{ env.SOURCE_SHA }}
+          submodules: true
+          persist-credentials: false
+      - name: Verify revisions and stage validation inputs
         run: |
-          sudo apt update
-          sudo apt install -y ninja-build
-          echo "CC=clang" >> $GITHUB_ENV
-          echo "CXX=clang++" >> $GITHUB_ENV
-      - name: (Windows) Configure MSVC
-        if: contains(matrix.name, 'windows')
-        uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1.13.0
-      - name: (macOS) Install requirements
-        if: contains(matrix.name, 'macos')
-        run: brew install ninja ccache coreutils bash
-
-      - name: Checkout runtime submodules
-        run: bash ./build_tools/scripts/git/update_runtime_submodules.sh
+          git config --global --add safe.directory "${GITHUB_WORKSPACE}"
+          test "$(git rev-parse HEAD)" = "${SOURCE_SHA}"
+          test "$(git -C third_party/llvm-project rev-parse HEAD)" = "${LLVM_SHA}"
+          git fetch --no-tags --depth=1 origin "${BASE_SHA}" "${SUBMITTED_SHA}" "${GITHUB_SHA}"
+          git show "${GITHUB_SHA}:validation/compare_sort_workspaces.py" > "${RUNNER_TEMP}/compare_sort_workspaces.py"
+          git show "${GITHUB_SHA}:validation/clone-sort-workspaces.cpp" > "${RUNNER_TEMP}/clone-sort-workspaces.cpp"
+          echo "CLONE_EXPERIMENT=${RUNNER_TEMP}/clone-sort-workspaces.cpp" >> "${GITHUB_ENV}"
+      - name: Restore existing Bazel disk cache
+        id: cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        continue-on-error: true
+        with:
+          path: ${{ env.BAZEL_DISK_CACHE }}
+          key: sort-workspace-v1-${{ runner.os }}-${{ hashFiles('MODULE.bazel') }}-${{ env.SOURCE_SHA }}
+          restore-keys: |
+            sort-workspace-v1-${{ runner.os }}-${{ hashFiles('MODULE.bazel') }}-
+            argsort-required-tie-v1-${{ runner.os }}-${{ hashFiles('MODULE.bazel') }}-
       - name: Install Python requirements
-        run: pip install -r ./runtime/bindings/python/iree/runtime/build_requirements.txt
-      - name: ccache
-        uses: hendrikmuhs/ccache-action@d62db5f07c26379fc4b4e0916f098a92573c3b03 # v1.2.23
+        run: python3 -m pip install -r runtime/bindings/python/iree/runtime/build_requirements.txt
+      - name: Install Bazelisk
+        run: ./build_tools/bazel/install_bazelisk.sh 1.21.0
+      - name: Compare exact sources and smaller clone alternative
+        run: python3 "${RUNNER_TEMP}/compare_sort_workspaces.py"
+      - name: Download matching clang-tidy
+        uses: dawidd6/action-download-artifact@d63b86af1b34672e53c440b1b83979861906bad7 # v24
         with:
-          key: ${{ github.job }}-${{ matrix.name }}
-          save: ${{ needs.setup.outputs.write-caches == 1 }}
-      - name: CMake - configure
+          repo: iree-org/iree
+          run_id: 32944069152
+          name: iree-clang-tidy-linux-x86_64
+          path: /tmp/iree-clang-tidy
+      - name: Analyze changed C++ lines
         run: |
-          cmake \
-            -G Ninja \
-            -B ${BUILD_DIR} \
-            -DCMAKE_BUILD_TYPE=RelWithDebInfo \
-            -DCMAKE_C_COMPILER_LAUNCHER=ccache \
-            -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
-            -DIREE_BUILD_COMPILER=OFF \
-            -DIREE_BUILD_PYTHON_BINDINGS=ON \
-            -DIREE_BUILD_SAMPLES=ON \
-            -DIREE_ENABLE_LLD=ON \
-            -DIREE_ENABLE_ASSERTIONS=ON \
-            ${{matrix.driver-options}}
-      - name: CMake - build
-        run: cmake --build ${BUILD_DIR} -- -k 0
-      - name: CTest
-        run: bash ./build_tools/cmake/ctest_all.sh "${BUILD_DIR}"
-
-  runtime_small:
-    needs: setup
-    if: contains(fromJson(needs.setup.outputs.enabled-jobs), 'runtime_small')
-    runs-on: ubuntu-24.04
-    env:
-      BUILD_DIR: build-runtime
-      CC: clang
-      CXX: clang++
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - name: Install requirements
-        run: sudo apt update && sudo apt install -y ninja-build
-      - name: Checkout runtime submodules
-        run: bash ./build_tools/scripts/git/update_runtime_submodules.sh
-      - name: ccache
-        uses: hendrikmuhs/ccache-action@d62db5f07c26379fc4b4e0916f098a92573c3b03 # v1.2.23
+          test "$(cat /tmp/iree-clang-tidy/llvm-project-revision.txt)" = "${LLVM_SHA}"
+          chmod +x /tmp/iree-clang-tidy/clang-tidy
+          bazel --noworkspace_rc --bazelrc=build_tools/bazel/iree.bazelrc aquery \
+            --sandbox_base="${SANDBOX_BASE}" --disk_cache="${BAZEL_DISK_CACHE}" \
+            --config=generic_clang_ci --noremote_upload_local_results \
+            --iree_compiler_plugins=hal_target_llvm_cpu,hal_target_local \
+            --iree_drivers=local-task --include_param_files --output=jsonproto \
+            'mnemonic("CppCompile", //compiler/src/iree/compiler/DispatchCreation:DispatchCreation)' \
+            > "${RUNNER_TEMP}/sort-compile-actions.json"
+          bazel --noworkspace_rc --bazelrc=build_tools/bazel/iree.bazelrc info execution_root \
+            > "${RUNNER_TEMP}/sort-execution-root"
+          python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+          import re
+          import subprocess
+          source = 'compiler/src/iree/compiler/DispatchCreation/ConvertDispatchRegionsToWorkgroups.cpp'
+          temp = Path(os.environ['RUNNER_TEMP'])
+          execution_root = (temp / 'sort-execution-root').read_text().strip()
+          actions = json.loads((temp / 'sort-compile-actions.json').read_text())['actions']
+          matches = []
+          for action in actions:
+              params = {p['execPath']: p['arguments'] for p in action.get('paramFiles', [])}
+              args = []
+              for arg in action['arguments']:
+                  args.extend(params[arg[1:]] if arg.startswith('@') else [arg])
+              if source in args:
+                  matches.append(args)
+          assert len(matches) == 1, len(matches)
+          db = temp / 'sort-compilation-database'
+          db.mkdir(exist_ok=True)
+          file = str(Path(execution_root) / source)
+          (db / 'compile_commands.json').write_text(json.dumps([
+              {'directory': execution_root, 'file': file, 'arguments': matches[0]}]))
+          diff = subprocess.check_output(['git', 'diff', '--unified=0', os.environ['BASE_SHA'],
+                  os.environ['SOURCE_SHA'], '--', source], text=True)
+          ranges = []
+          for start, count in re.findall(r'^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@', diff, re.M):
+              start, count = int(start), int(count) if count else 1
+              if count:
+                  ranges.append([start, start + count - 1])
+          assert ranges
+          resource = subprocess.check_output(['clang', '-print-resource-dir'], text=True).strip()
+          command = ['/tmp/iree-clang-tidy/clang-tidy', file, '-p', str(db),
+              '--config-file=' + str(Path(os.environ['GITHUB_WORKSPACE']) / 'compiler/.clang-tidy'),
+              '--line-filter=' + json.dumps([{'name': source, 'lines': ranges}]),
+              '--extra-arg=-resource-dir=' + resource, '--warnings-as-errors=*']
+          log = temp / 'sort-workspace-evidence' / 'clang-tidy.log'
+          with log.open('w') as output:
+              result = subprocess.run(command, stdout=output, stderr=subprocess.STDOUT, cwd=execution_root)
+          print(log.read_text())
+          result.check_returncode()
+          PY
+      - name: Save validation evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          key: ${{ github.job }}
-          save: ${{ needs.setup.outputs.write-caches == 1 }}
-      - name: CMake - configure
-        run: |
-          cmake \
-            -G Ninja \
-            -B ${BUILD_DIR} \
-            -DCMAKE_BUILD_TYPE=MinSizeRel \
-            -DCMAKE_C_COMPILER_LAUNCHER=ccache \
-            -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
-            -DIREE_BUILD_COMPILER=OFF \
-            -DIREE_RUNTIME_OPTIMIZATION_PROFILE=size \
-            -DIREE_ENABLE_LLD=ON
-      - name: CMake - build
-        run: cmake --build ${BUILD_DIR} -- -k 0
-      - name: CTest
-        run: bash ./build_tools/cmake/ctest_all.sh "${BUILD_DIR}"
-
-  runtime_wasm:
-    needs: setup
-    name: "runtime_wasm :: wasm32"
-    if: contains(fromJson(needs.setup.outputs.enabled-jobs), 'runtime_wasm')
-    runs-on: ubuntu-24.04
-    env:
-      BUILD_DIR: build-runtime-wasm
-    defaults:
-      run:
-        shell: bash
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - name: Install requirements
-        run: sudo apt update && sudo apt install -y ninja-build
-      - name: Checkout runtime submodules
-        run: bash ./build_tools/scripts/git/update_runtime_submodules.sh
-      - name: ccache
-        uses: hendrikmuhs/ccache-action@d62db5f07c26379fc4b4e0916f098a92573c3b03 # v1.2.23
+          name: sort-workspace-evidence
+          path: ${{ runner.temp }}/sort-workspace-evidence
+          if-no-files-found: warn
+      - name: Save compiler cache
+        if: always() && steps.cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        continue-on-error: true
         with:
-          key: ${{ github.job }}
-          save: ${{ needs.setup.outputs.write-caches == 1 }}
-      - name: CMake - configure
-        run: |
-          cmake \
-            -G Ninja \
-            -B ${BUILD_DIR} \
-            -DCMAKE_TOOLCHAIN_FILE=build_tools/cmake/wasm32.cmake \
-            -DCMAKE_BUILD_TYPE=MinSizeRel \
-            -DCMAKE_C_COMPILER_LAUNCHER=ccache \
-            -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
-            -DIREE_RUNTIME_OPTIMIZATION_PROFILE=size \
-            -DIREE_ENABLE_LLD=ON
-      - name: CMake - build wasm32 runtime smoke targets
-        run: |
-          cmake --build ${BUILD_DIR} \
-            --target \
-              iree_wasm_libc \
-              iree_samples_hal_hello_hello \
-              iree_async_platform_js_proactor \
-              iree_hal_drivers_local_sync_sync_driver \
-            -- -k 0
-
-  runtime_tracing:
-    needs: setup
-    name: "runtime_tracing :: ${{ matrix.runs-on }} :: ${{ matrix.provider }}"
-    if: contains(fromJson(needs.setup.outputs.enabled-jobs), 'runtime_tracing')
-    runs-on: ${{ matrix.runs-on }}
-    defaults:
-      run:
-        shell: bash
-    strategy:
-      fail-fast: false
-      matrix:
-        runs-on: [ubuntu-24.04, ubuntu-24.04-arm, windows-2022, macos-14]
-        provider: [tracy, console]
-    env:
-      BUILD_DIR: build-tracing
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-
-      - name: (Linux) Install requirements
-        if: contains(matrix.runs-on, 'ubuntu')
-        run: |
-          sudo apt update
-          sudo apt install -y ninja-build
-          echo "CC=clang" >> $GITHUB_ENV
-          echo "CXX=clang++" >> $GITHUB_ENV
-      - name: (Windows) Configure MSVC
-        if: contains(matrix.runs-on, 'windows')
-        uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1.13.0
-      - name: (macOS) Install requirements
-        if: contains(matrix.runs-on, 'macos')
-        run: brew install ninja ccache coreutils bash
-
-      - name: (Linux/Windows) Set driver options
-        if: contains(matrix.runs-on, 'ubuntu') || contains(matrix.runs-on, 'windows')
-        run: echo IREE_DRIVER_OPTIONS="-DIREE_HAL_DRIVER_CUDA=ON -DIREE_HAL_DRIVER_HIP=ON -DIREE_HAL_DRIVER_VULKAN=ON" >> $GITHUB_ENV
-      - name: (macOS) Set driver options
-        if: contains(matrix.runs-on, 'macos')
-        run: echo IREE_DRIVER_OPTIONS="-DIREE_HAL_DRIVER_METAL=ON -DIREE_HAL_DRIVER_VULKAN=OFF" >> $GITHUB_ENV
-
-      - name: Checkout runtime submodules
-        run: bash ./build_tools/scripts/git/update_runtime_submodules.sh
-      - name: ccache
-        uses: hendrikmuhs/ccache-action@d62db5f07c26379fc4b4e0916f098a92573c3b03 # v1.2.23
-        with:
-          key: ${{ github.job }}-${{ matrix.runs-on}}-${{ matrix.provider }}
-          save: ${{ needs.setup.outputs.write-caches == 1 }}
-      - name: CMake - configure
-        run: |
-          cmake \
-            -G Ninja \
-            -B ${BUILD_DIR} \
-            -DCMAKE_BUILD_TYPE=RelWithDebInfo \
-            -DCMAKE_C_COMPILER_LAUNCHER=ccache \
-            -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
-            -DIREE_BUILD_COMPILER=OFF \
-            -DIREE_ENABLE_LLD=ON \
-            -DIREE_ENABLE_RUNTIME_TRACING=ON \
-            -DIREE_TRACING_PROVIDER=${{ matrix.provider }} \
-            ${IREE_DRIVER_OPTIONS}
-      - name: CMake - build
-        run: cmake --build ${BUILD_DIR} -- -k 0
-
-  ##############################################################################
-  # Full project builds
-
-  linux_x64_bazel:
-    needs: setup
-    if: contains(fromJson(needs.setup.outputs.enabled-jobs), 'linux_x64_bazel')
-    uses: ./.github/workflows/ci_linux_x64_bazel.yml
-    secrets: inherit
-
-  linux_x64_clang:
-    needs: setup
-    if: contains(fromJson(needs.setup.outputs.enabled-jobs), 'linux_x64_clang')
-    uses: ./.github/workflows/ci_linux_x64_clang.yml
-    secrets: inherit
-
-  linux_x64_gcc:
-    needs: setup
-    if: contains(fromJson(needs.setup.outputs.enabled-jobs), 'linux_x64_gcc')
-    uses: ./.github/workflows/ci_linux_x64_gcc.yml
-    secrets: inherit
-
-  linux_arm64_clang:
-    needs: setup
-    if: contains(fromJson(needs.setup.outputs.enabled-jobs), 'linux_arm64_clang')
-    uses: ./.github/workflows/ci_linux_arm64_clang.yml
-    secrets: inherit
-
-  linux_x64_clang_debug:
-    needs: setup
-    if: contains(fromJson(needs.setup.outputs.enabled-jobs), 'linux_x64_clang_debug')
-    uses: ./.github/workflows/ci_linux_x64_clang_debug.yml
-    secrets: inherit
-
-  linux_x64_clang_asan:
-    needs: setup
-    if: contains(fromJson(needs.setup.outputs.enabled-jobs), 'linux_x64_clang_asan')
-    uses: ./.github/workflows/ci_linux_x64_clang_asan.yml
-    secrets: inherit
-
-  linux_x64_clang_ubsan:
-    needs: setup
-    if: contains(fromJson(needs.setup.outputs.enabled-jobs), 'linux_x64_clang_ubsan')
-    uses: ./.github/workflows/ci_linux_x64_clang_ubsan.yml
-    secrets: inherit
-
-  linux_x64_clang_tsan:
-    needs: setup
-    if: contains(fromJson(needs.setup.outputs.enabled-jobs), 'linux_x64_clang_tsan')
-    uses: ./.github/workflows/ci_linux_x64_clang_tsan.yml
-    secrets: inherit
-
-  linux_x64_clang_byollvm:
-    needs: setup
-    if: contains(fromJson(needs.setup.outputs.enabled-jobs), 'linux_x64_clang_byollvm')
-    uses: ./.github/workflows/ci_linux_x64_clang_byollvm.yml
-    secrets: inherit
-
-  macos_arm64_clang:
-    needs: setup
-    if: contains(fromJson(needs.setup.outputs.enabled-jobs), 'macos_arm64_clang')
-    uses: ./.github/workflows/ci_macos_arm64_clang.yml
-    secrets: inherit
-
-  windows_x64_msvc:
-    needs: setup
-    if: contains(fromJson(needs.setup.outputs.enabled-jobs), 'windows_x64_msvc')
-    uses: ./.github/workflows/ci_windows_x64_msvc.yml
-    secrets: inherit
-
-  ##############################################################################
-
-  # Aggregate job status and alerting on failures.
-  ci_summary:
-    if: always()
-    needs:
-      - setup
-
-      # Runtime builds.
-      - runtime
-      - runtime_small
-      - runtime_wasm
-      - runtime_tracing
-
-      # Full project builds.
-      - linux_x64_bazel
-      - linux_x64_clang
-      - linux_x64_gcc
-      - linux_arm64_clang
-      - linux_x64_clang_debug
-      - linux_x64_clang_asan
-      - linux_x64_clang_ubsan
-      - linux_x64_clang_tsan
-      - linux_x64_clang_byollvm
-      - macos_arm64_clang
-      - windows_x64_msvc
-    uses: ./.github/workflows/workflow_summary.yml
-    secrets: inherit
-    with:
-      jobs-json: ${{ toJson(needs) }}
+          path: ${{ env.BAZEL_DISK_CACHE }}
+          key: ${{ steps.cache.outputs.cache-primary-key }}

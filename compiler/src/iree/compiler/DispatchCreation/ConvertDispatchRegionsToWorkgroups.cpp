@@ -142,9 +142,7 @@ convertDispatchRegionWithSortWorkspaces(IREE::Flow::DispatchRegionOp &regionOp,
         rewriter, emptyOp.getLoc(), emptyOp.getType(), binding,
         emptyOp.getDynamicSizes());
     rewriter.modifyOpInPlace(init->getOwner(), [&]() { init->set(loadOp); });
-    if (emptyOp->use_empty()) {
-      rewriter.eraseOp(emptyOp);
-    }
+    rewriter.eraseOp(emptyOp);
   }
   return *workgroupsOp;
 }

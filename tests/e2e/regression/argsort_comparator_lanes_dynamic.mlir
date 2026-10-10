@@ -3,6 +3,8 @@
 // RUN: iree-run-mlir --Xcompiler,iree-hal-target-device=local --Xcompiler,iree-hal-local-target-device-backends=llvm-cpu --Xcompiler,iree-llvmcpu-target-cpu=generic %s --function=argsort_shared_keys --input="3xi64=[3 1 2]" | FileCheck %s --check-prefix=SHARED
 // RUN: iree-run-mlir --Xcompiler,iree-hal-target-device=local --Xcompiler,iree-hal-local-target-device-backends=llvm-cpu --Xcompiler,iree-llvmcpu-target-cpu=generic %s --function=argsort_shared_keys --input="3xi64=[9223372036854775807 -9223372036854775808 0]" | FileCheck %s --check-prefix=EXTREMES
 // RUN: iree-run-mlir --Xcompiler,iree-hal-target-device=local --Xcompiler,iree-hal-local-target-device-backends=llvm-cpu --Xcompiler,iree-llvmcpu-target-cpu=generic %s --function=argsort_shared_keys --input="0xi64" | FileCheck %s --check-prefix=EMPTY
+// RUN: iree-run-mlir --Xcompiler,iree-hal-target-device=local --Xcompiler,iree-hal-local-target-device-backends=llvm-cpu --Xcompiler,iree-llvmcpu-target-cpu=generic %s --function=sort_carried_labels --input="2xi64=[2 1]" --input="2xi64=[1 0]" | FileCheck %s --check-prefix=LABELS
+// RUN: iree-run-mlir --Xcompiler,iree-hal-target-device=local --Xcompiler,iree-hal-local-target-device-backends=llvm-cpu --Xcompiler,iree-llvmcpu-target-cpu=generic %s --function=sort_carried_labels --input="2xi64=[2 1]" --input="2xi64=[7 -3]" | FileCheck %s --check-prefix=NONINDICES
 
 #identity = affine_map<(d0) -> (d0)>
 
@@ -55,6 +57,18 @@ func.func @argsort_shared_keys(%input: tensor<?xi64>)
   return %sorted#2, %input : tensor<?xi64>, tensor<?xi64>
 }
 
+// Carried values are labels; they need not identify positions in the keys.
+func.func @sort_carried_labels(%keys: tensor<?xi64>, %labels: tensor<?xi64>)
+    -> tensor<?xi64> {
+  %sorted:2 = iree_linalg_ext.sort dimension(0)
+      outs(%keys, %labels : tensor<?xi64>, tensor<?xi64>) {
+  ^bb0(%lhs: i64, %rhs: i64, %lhs_label: i64, %rhs_label: i64):
+    %cmp = arith.cmpi sle, %lhs, %rhs : i64
+    iree_linalg_ext.yield %cmp : i1
+  } -> tensor<?xi64>, tensor<?xi64>
+  return %sorted#1 : tensor<?xi64>
+}
+
 // TRAILING-LABEL: EXEC @argsort_trailing_float_keys
 // TRAILING: 3xi64=1 2 0
 // EQUAL-LABEL: EXEC @argsort_trailing_float_keys
@@ -68,3 +82,7 @@ func.func @argsort_shared_keys(%input: tensor<?xi64>)
 // EMPTY-LABEL: EXEC @argsort_shared_keys
 // EMPTY: 0xi64=
 // EMPTY: 0xi64=
+// LABELS-LABEL: EXEC @sort_carried_labels
+// LABELS: 2xi64=0 1
+// NONINDICES-LABEL: EXEC @sort_carried_labels
+// NONINDICES: 2xi64=-3 7

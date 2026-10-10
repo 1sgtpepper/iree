@@ -84,11 +84,8 @@ convertDispatchRegionWithSortWorkspaces(IREE::Flow::DispatchRegionOp &regionOp,
         continue;
       }
       rewriter.setInsertionPoint(regionOp);
-      SmallVector<Value> dims;
-      if (failed(IREE::Flow::getOptimizedDynamicResultDims(rewriter, source,
-                                                           dims))) {
-        continue;
-      }
+      auto dims = IREE::Util::buildDynamicDimsForValue(sortOp.getLoc(), source,
+                                                     rewriter);
       auto cloneOp = IREE::Flow::TensorCloneOp::create(
           rewriter, sortOp.getLoc(), source);
       rewriter.modifyOpInPlace(sortOp, [&]() { init.set(cloneOp); });

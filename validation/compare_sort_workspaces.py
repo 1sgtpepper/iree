@@ -172,6 +172,18 @@ command('no-workspace-control', bazel + ['test'] + flags +
         ['--test_output=errors', runtime[0]], [runtime[0]])
 
 checkout(source)
+before = '''auto dims = IREE::Util::buildDynamicDimsForValue(sortOp.getLoc(), source,
+                                                       rewriter);'''
+assert original.count(before) == 1
+cpp.write_text(original.replace(before, '''SmallVector<Value> dims;
+      if (failed(IREE::Flow::getOptimizedDynamicResultDims(rewriter, source, dims))) {
+        continue;
+      }'''))
+command('optimized-shape-helper-control', bazel + ['test'] + flags +
+        ['--keep_going', '--test_output=errors', compiler[2], compiler[3]],
+        [compiler[2], compiler[3]])
+
+checkout(source)
 before = 'linalg::CopyOp::create(rewriter, sortOp.getLoc(), source, workspace);'
 assert original.count(before) == 1
 modified = original.replace('#include \"mlir/Dialect/Affine/IR/AffineOps.h\"',

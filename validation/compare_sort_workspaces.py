@@ -10,6 +10,8 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -86,6 +88,48 @@ def checkout(ref, overlay=False):
         assert hashlib.sha256(Path(path).read_bytes()).hexdigest() == report['fixture_hashes'][path]
 
 
+def isolated_runtime_probes(name):
+    # --function selects runtime execution; compilation still sees the whole module.
+    # Demote other explicit fixture entry points, then let MLIR's symbol-dce own
+    # extraction. Do not infer a function boundary from printed braces.
+    tools = bazel + ['build'] + flags + ['//tools:iree-opt', '//tools:iree-run-mlir', '@llvm-project//llvm:FileCheck']
+    if command(name + '-probe-tools', tools):
+        return
+    query = bazel + ['cquery'] + flags + ['@llvm-project//llvm:FileCheck', '--output=files']
+    paths = subprocess.check_output(query, text=True).strip().splitlines()
+    assert len(paths) == 1, paths
+    filecheck = paths[0]
+    counter = 0
+    for path in fixtures:
+        text = Path(path).read_text()
+        names = re.findall(r'^func\.func @(\w+)\(', text, re.M)
+        assert len(names) == len(set(names)) and names
+        for line in text.splitlines():
+            if not line.startswith('// RUN: '):
+                continue
+            counter += 1
+            args = shlex.split(line[len('// RUN: '):])
+            pipe = args.index('|')
+            run, check = args[:pipe], args[pipe + 1:]
+            selected = [arg.split('=', 1)[1] for arg in run if arg.startswith('--function=')]
+            function = selected[0] if selected else names[0]
+            assert len(selected) <= 1 and function in names
+            probe = name + '-' + str(counter) + '-' + function
+            modified = re.sub(r'^func\.func @(\w+)(?=\()',
+                lambda m: m.group(0) if m.group(1) == function else 'func.func private @' + m.group(1),
+                text, flags=re.M)
+            prepared = out / (probe + '-input.mlir')
+            capsule = out / (probe + '.mlir')
+            prepared.write_text(modified)
+            if command(probe + '-isolate', ['bazel-bin/tools/iree-opt', str(prepared), '--symbol-dce', '-o', str(capsule)]):
+                continue
+            run = ['bazel-bin/tools/iree-run-mlir'] + [str(capsule) if arg == '%s' else arg for arg in run[1:]]
+            status = command(probe + '-runtime', run)
+            if status == 0:
+                check = [filecheck] + [path if arg == '%s' else arg for arg in check[1:]]
+                command(probe + '-oracle', check + ['--input-file=' + str(out / (probe + '-runtime.log'))])
+
+
 fixture_contents = {path: subprocess.check_output(['git', 'show', source + ':' + path])
                     for path in fixtures + registrations}
 for path in fixtures:
@@ -101,17 +145,21 @@ if command('candidate-positive', bazel + ['test'] + flags +
 if command('build-ir-tools', bazel + ['build'] + flags + ['//tools:iree-compile', '//tools:iree-opt']):
     sys.exit('IR tools did not build.')
 
+isolated_runtime_probes('candidate')
+
 for name, ref in [('base-runtime', base), ('submitted-runtime', submitted)]:
     checkout(ref, overlay=True)
     command(name, bazel + ['test'] + flags + ['--keep_going', '--test_output=errors'] + runtime, runtime)
+    isolated_runtime_probes(name)
 
 checkout(source)
 cpp.write_bytes(Path(os.environ['CLONE_EXPERIMENT']).read_bytes())
 command('clone-experiment-runtime', bazel + ['test'] + flags +
         ['--keep_going', '--test_output=errors'] + runtime, runtime)
-command('clone-ir-tools', bazel + ['build'] + flags + ['//tools:iree-opt'])
-command('clone-experiment-flow', [str(Path('bazel-bin/tools/iree-opt')),
-        fixtures[2], '--iree-dispatch-creation-pipeline', '--mlir-disable-threading'])
+isolated_runtime_probes('clone-experiment')
+if command('clone-ir-tools', bazel + ['build'] + flags + ['//tools:iree-opt']) == 0:
+    command('clone-experiment-flow', [str(Path('bazel-bin/tools/iree-opt')),
+            fixtures[2], '--iree-dispatch-creation-pipeline', '--mlir-disable-threading'])
 
 checkout(source)
 original = cpp.read_text()
@@ -124,12 +172,16 @@ command('no-workspace-control', bazel + ['test'] + flags +
         ['--test_output=errors', runtime[0]], [runtime[0]])
 
 checkout(source)
-# Make Copy read its own uninitialized destination, retaining all destination plumbing.
 before = 'linalg::CopyOp::create(rewriter, sortOp.getLoc(), source, workspace);'
 assert original.count(before) == 1
-cpp.write_text(original.replace(before,
-    'linalg::CopyOp::create(rewriter, sortOp.getLoc(), workspace, workspace);'))
-command('uninitialized-workspace-control', bazel + ['test'] + flags +
+modified = original.replace('#include \"mlir/Dialect/Affine/IR/AffineOps.h\"',
+    '#include \"mlir/Dialect/Affine/IR/AffineOps.h\"\n#include \"mlir/Dialect/Arith/IR/Arith.h\"')
+modified = modified.replace(before,
+    'linalg::FillOp::create(rewriter, sortOp.getLoc(), '
+    'ValueRange{arith::ConstantOp::create(rewriter, sortOp.getLoc(), '
+    'rewriter.getZeroAttr(workspace.getType().getElementType()))}, ValueRange{workspace});')
+cpp.write_text(modified)
+command('zero-key-initialization-control', bazel + ['test'] + flags +
         ['--test_output=errors', runtime[1]], [runtime[1]])
 
 checkout(source)
@@ -147,8 +199,19 @@ for path in fixtures:
     command(name + '-lowering', [str(Path('bazel-bin/tools/iree-compile')), path,
             '--iree-hal-target-device=local', '--iree-hal-local-target-device-backends=llvm-cpu',
             '--iree-llvmcpu-target-cpu=generic', '--mlir-disable-threading',
-            '--mlir-print-ir-after=iree-comprehensive-bufferize,iree-tile-and-distribute-to-workgroups-using-forall-op,iree-llvmcpu-check-ir-before-llvm-conversion',
+            '--mlir-print-ir-after=iree-codegen-iree-comprehensive-bufferize,iree-codegen-tile-and-distribute-to-workgroups-using-forall-op,iree-llvmcpu-check-ir-before-llvm-conversion',
             '-o', str(out / (name + '.vmfb'))])
+    if name == 'argsort_views_dynamic':
+        command(name + '-distributed-lowering', [str(Path('bazel-bin/tools/iree-compile')), path,
+                '--iree-hal-target-device=local', '--iree-hal-local-target-device-backends=llvm-cpu',
+                '--iree-llvmcpu-target-cpu=generic', '--iree-llvmcpu-distribution-size=1',
+                '--mlir-disable-threading',
+                '--mlir-print-ir-after=iree-codegen-iree-comprehensive-bufferize,iree-codegen-tile-and-distribute-to-workgroups-using-forall-op,iree-llvmcpu-check-ir-before-llvm-conversion',
+                '-o', str(out / (name + '-distributed.vmfb'))])
+command('shared-destination-analysis', ['bazel-bin/tools/iree-opt', os.environ['SHARED_DESTINATION_PROBE'],
+        '--pass-pipeline=builtin.module(func.func(iree-codegen-iree-comprehensive-bufferize{test-analysis-only=true print-conflicts=true}))'])
+command('shared-destination-bufferization', ['bazel-bin/tools/iree-opt', os.environ['SHARED_DESTINATION_PROBE'],
+        '--pass-pipeline=builtin.module(func.func(iree-codegen-iree-comprehensive-bufferize,canonicalize,cse,canonicalize))'])
 # Experimental results are evidence, not assumed expected failures.
 subprocess.run(['git', 'diff', '--exit-code'], check=True)
 save_report()

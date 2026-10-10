@@ -18,7 +18,7 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  SOURCE_SHA: 3316c5faa04a20ba1762ee8079aa9b530c97e51b
+  SOURCE_SHA: c4873baf2cf4bdccc7b152dc40d4f3c143c55905
   BASE_SHA: 6ec253ad4e259ad256c8a226f7a7a330debf937c
   SUBMITTED_SHA: 146ea2a4b2332b194e5e37db137672a8799a4f6c
   LLVM_SHA: 53e39b225bd164efeae02c9a0721021469d5bc67
@@ -68,7 +68,9 @@ jobs:
           git fetch --no-tags --depth=1 origin "${BASE_SHA}" "${SUBMITTED_SHA}" "${GITHUB_SHA}"
           git show "${GITHUB_SHA}:validation/compare_sort_workspaces.py" > "${RUNNER_TEMP}/compare_sort_workspaces.py"
           git show "${GITHUB_SHA}:validation/clone-sort-workspaces.cpp" > "${RUNNER_TEMP}/clone-sort-workspaces.cpp"
+          git show "${GITHUB_SHA}:validation/sort_shared_destination.mlir" > "${RUNNER_TEMP}/sort_shared_destination.mlir"
           echo "CLONE_EXPERIMENT=${RUNNER_TEMP}/clone-sort-workspaces.cpp" >> "${GITHUB_ENV}"
+          echo "SHARED_DESTINATION_PROBE=${RUNNER_TEMP}/sort_shared_destination.mlir" >> "${GITHUB_ENV}"
       - name: Restore existing Bazel disk cache
         id: cache
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0

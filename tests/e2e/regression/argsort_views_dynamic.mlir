@@ -1,6 +1,7 @@
 // RUN: iree-run-mlir --Xcompiler,iree-hal-target-device=local --Xcompiler,iree-hal-local-target-device-backends=llvm-cpu --Xcompiler,iree-llvmcpu-target-cpu=generic %s --function=argsort_collapsed_keys --input="1x3xi64=[3 1 2]" | FileCheck %s --check-prefix=COLLAPSED
 // RUN: iree-run-mlir --Xcompiler,iree-hal-target-device=local --Xcompiler,iree-hal-local-target-device-backends=llvm-cpu --Xcompiler,iree-llvmcpu-target-cpu=generic %s --function=argsort_collapsed_keys --input="1x0xi64" | FileCheck %s --check-prefix=EMPTY
 // RUN: iree-run-mlir --Xcompiler,iree-hal-target-device=local --Xcompiler,iree-hal-local-target-device-backends=llvm-cpu --Xcompiler,iree-llvmcpu-target-cpu=generic %s --function=argsort_rows --input="2x3xi64=[3 1 2][2 1 2]" | FileCheck %s --check-prefix=ROWS
+// RUN: iree-run-mlir --Xcompiler,iree-hal-target-device=local --Xcompiler,iree-hal-local-target-device-backends=llvm-cpu --Xcompiler,iree-llvmcpu-target-cpu=generic --Xcompiler,iree-llvmcpu-distribution-size=1 %s --function=argsort_rows --input="2x3xi64=[3 1 2][2 1 2]" | FileCheck %s --check-prefix=ROWS
 
 #identity = affine_map<(d0) -> (d0)>
 #identity2 = affine_map<(d0, d1) -> (d0, d1)>

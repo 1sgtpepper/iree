@@ -48,8 +48,7 @@ static FailureOr<IREE::Flow::DispatchWorkgroupsOp>
 convertDispatchRegionWithSortWorkspaces(IREE::Flow::DispatchRegionOp &regionOp,
                                         RewriterBase &rewriter) {
   if (!llvm::hasSingleElement(regionOp.getBody()) ||
-      llvm::empty(
-          regionOp.getBody().front().getOps<IREE::LinalgExt::SortOp>())) {
+      regionOp.getBody().front().getOps<IREE::LinalgExt::SortOp>().empty()) {
     return rewriteFlowDispatchRegionToFlowDispatchWorkgroups(regionOp,
                                                              rewriter);
   }
@@ -100,7 +99,8 @@ convertDispatchRegionWithSortWorkspaces(IREE::Flow::DispatchRegionOp &regionOp,
           rewriter, sortOp.getLoc(), cast<RankedTensorType>(source.getType()),
           dims);
       auto copyOp =
-          linalg::CopyOp::create(rewriter, sortOp.getLoc(), source, workspace);
+          linalg::CopyOp::create(rewriter, sortOp.getLoc(), ValueRange{source},
+                                 ValueRange{workspace.getResult()});
       rewriter.modifyOpInPlace(sortOp,
                                [&]() { init.set(copyOp.getResult(0)); });
       workspaceInits.emplace_back(copyOp.getDpsInitOperand(0),
@@ -141,7 +141,8 @@ convertDispatchRegionWithSortWorkspaces(IREE::Flow::DispatchRegionOp &regionOp,
     auto loadOp = IREE::TensorExt::DispatchTensorLoadOp::create(
         rewriter, emptyOp.getLoc(), emptyOp.getType(), binding,
         emptyOp.getDynamicSizes());
-    rewriter.modifyOpInPlace(init->getOwner(), [&]() { init->set(loadOp); });
+    rewriter.modifyOpInPlace(init->getOwner(),
+                             [init = init, &loadOp]() { init->set(loadOp); });
     rewriter.eraseOp(emptyOp);
   }
   return *workgroupsOp;

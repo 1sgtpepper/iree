@@ -28,6 +28,31 @@ for name, report in reports.items():
         )
     if report["verdict"] != "pass" or report["identity"] != identity:
         raise SystemExit(name + ": required identity/verdict failed")
+required_phases = {
+    "identity": 1,
+    "compile": 8,
+    "runtime": 102,
+    "oracle": 32,
+    "compiler test": 8,
+    "runtime fixture": 24,
+}
+for name in ("exact-source", "restored-exact-source"):
+    runs = reports[name]["runs"]
+    if (
+        len({row["name"] for row in runs}) != sum(required_phases.values())
+        or {row["phase"] for row in runs} != required_phases.keys()
+        or any(
+            sum(row["phase"] == phase for row in runs) != count
+            for phase, count in required_phases.items()
+        )
+    ):
+        raise SystemExit(name + ": required primary phases are incomplete")
+    if any(
+        row["exit_status"] != row["expected_status"]
+        or row["expected_status"] != (1 if row["name"] == "wrong-result-control" else 0)
+        for row in runs
+    ):
+        raise SystemExit(name + ": required command status failed")
 expected_controls = {
     "baseline-compile",
     "zero-initialization-oracle",
@@ -38,6 +63,38 @@ if {
     row["name"] for row in reports["source-controls"]["runs"] if "outcome" in row
 } != expected_controls:
     raise SystemExit("Required source controls are incomplete")
+required_control_commands = {
+    "baseline-build",
+    "baseline-compile",
+    "zero-initialization-build",
+    "zero-initialization-compile",
+    "zero-initialization-run",
+    "zero-initialization-oracle",
+    "partial-sort-build",
+    "partial-sort-compile",
+    "partial-sort-run",
+    "partial-sort-oracle",
+    "borrowed-preservation-build",
+    "borrowed-preservation-compile",
+    "borrowed-preservation-run",
+    "borrowed-preservation-oracle",
+    "restore-build",
+}
+control_runs = reports["source-controls"]["runs"]
+if (
+    len(control_runs) != 15
+    or {row["name"] for row in control_runs} != required_control_commands
+):
+    raise SystemExit("Required control build/compile/runtime phases are incomplete")
+if any(
+    row["exit_status"] != (1 if row["name"] in expected_controls else 0)
+    for row in control_runs
+):
+    raise SystemExit("Required control build/compile/runtime status failed")
+if len(additional["commands"]) != 118 or any(
+    row["status"] != 0 for row in additional["commands"]
+):
+    raise SystemExit("Required additional commands are incomplete or failed")
 if len(additional["cases"]) != 116 or any(
     row["verdict"] != "pass" for row in additional["cases"]
 ):

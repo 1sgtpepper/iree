@@ -10,6 +10,9 @@ allocation checks, compiler fixtures, literal runtime RUN lines, and four rebuil
 source controls. Build failures, missing checks, unrelated diagnostics, stale
 reports, and escaped controls fail the run. The final source is restored and the
 positive suites run again after the controls.
+Aggregate admission also requires complete primary phases and every successful
+control build; executable report mutations verify that incomplete or failed
+reports cannot become a full validation success.
 
 Run the registered manual workflow against this validation branch:
 

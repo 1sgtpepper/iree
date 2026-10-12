@@ -40,3 +40,4 @@ ninja -C build -j2 iree-compile iree-opt iree-run-module iree-run-mlir FileCheck
 .venv/bin/python validation/validate_exact_source.py --out evidence/restored-exact-source
 .venv/bin/python validation/check_additional_sort_cases.py
 .venv/bin/python validation/summarize_results.py
+.venv/bin/python validation/test_aggregate_controls.py > evidence/aggregate-command-test.log

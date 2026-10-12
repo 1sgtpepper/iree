@@ -19,6 +19,7 @@
 #include "mlir/Dialect/MemRef/Transforms/Transforms.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/Dialect/Tensor/IR/Tensor.h"
+#include "mlir/IR/IRMapping.h"
 #include "mlir/Interfaces/FunctionInterfaces.h"
 #include "mlir/Interfaces/SideEffectInterfaces.h"
 #include "mlir/Support/LLVM.h"
@@ -280,7 +281,8 @@ void ConvertDispatchRegionsToWorkgroupsPass::runOnOperation() {
   funcOp.walk(
       [&](IREE::Flow::DispatchRegionOp op) { regionOps.push_back(op); });
 
-  numDispatches += regionOps.size();
+  int64_t dispatchCountDelta = 0;
+  funcOp.walk([&](IREE::Flow::DispatchWorkgroupsOp) { --dispatchCountDelta; });
 
   // Clone additional producers and rewrite to DispatchWorkgroupsOp.
   for (auto regionOp : regionOps) {
@@ -292,5 +294,7 @@ void ConvertDispatchRegionsToWorkgroupsPass::runOnOperation() {
       return signalPassFailure();
     }
   }
+  funcOp.walk([&](IREE::Flow::DispatchWorkgroupsOp) { ++dispatchCountDelta; });
+  numDispatches += dispatchCountDelta;
 }
 } // namespace mlir::iree_compiler::DispatchCreation

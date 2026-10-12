@@ -1,0 +1,410 @@
+# Copyright 2026 The IREE Authors
+#
+# Licensed under the Apache License v2.0 with LLVM Exceptions.
+# See https://llvm.org/LICENSE.txt for license information.
+# SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
+
+"""Build actual C++ controls, distinguish phases, and restore exact final source."""
+import atexit
+import hashlib
+import json
+import os
+from pathlib import Path
+import re
+import subprocess
+import sys
+import numpy as np
+
+root = Path(__file__).resolve().parents[1]
+source = root.parent / "source"
+build = root / "build"
+out = root / "evidence/source-controls"
+out.mkdir(exist_ok=True)
+identity = json.loads((root / "validation/source-identity.json").read_text())
+positive = json.loads((root / "evidence/exact-source/results.json").read_text())
+if (
+    positive["verdict"] != "pass"
+    or positive["identity"] != identity
+    or positive.get("validation_id") != os.environ.get("SORT_VALIDATION_RUN_ID")
+    or not positive.get("scope", "").startswith("exact-source CPU semantic")
+):
+    raise SystemExit(
+        "An exact-identity positive execution is required before source controls."
+    )
+relative = (
+    "compiler/src/iree/compiler/DispatchCreation/ConvertDispatchRegionsToWorkgroups.cpp"
+)
+tiling_relative = (
+    "compiler/src/iree/compiler/Dialect/LinalgExt/IR/TilingInterfaceImpl.cpp"
+)
+cpp = source / relative
+final_files = {
+    name: (source / name).read_bytes() for name in (relative, tiling_relative)
+}
+compiler = build / "tools/iree-compile"
+runtime = build / "tools/iree-run-module"
+report = {
+    "validation_id": os.environ["SORT_VALIDATION_RUN_ID"],
+    "verdict": "running",
+    "identity": identity,
+    "runs": [],
+}
+
+
+def save():
+    (out / "results.json").write_text(json.dumps(report, indent=2) + "\n")
+
+
+def unfinished():
+    if report["verdict"] == "running":
+        report["verdict"] = "fail"
+        report["failure"] = "Required controls did not complete"
+        save()
+
+
+atexit.register(unfinished)
+
+
+def require(ok, message):
+    if not ok:
+        report["verdict"] = "fail"
+        report["failure"] = message
+        save()
+        raise RuntimeError(message)
+
+
+def command(name, args, phase, status=0):
+    args = [str(v) for v in args]
+    result = subprocess.run(args, capture_output=True, text=True, timeout=300)
+    (out / (name + ".log")).write_text(result.stdout + result.stderr)
+    report["runs"].append(
+        {
+            "name": name,
+            "command": args,
+            "phase": phase,
+            "exit_status": result.returncode,
+            "production_sha256": {
+                path: hashlib.sha256((source / path).read_bytes()).hexdigest()
+                for path in final_files
+            },
+        }
+    )
+    if phase == "build":
+        report["runs"][-1]["compiler_library_sha256"] = hashlib.sha256(
+            (build / "lib/libIREECompiler.so").read_bytes()
+        ).hexdigest()
+    save()
+    require(result.returncode == status, name + ": unexpected " + phase + " status")
+    return result
+
+
+def restore():
+    for name, contents in final_files.items():
+        (source / name).write_bytes(contents)
+
+
+def reject_ordering(name, actual_path, input_values, incorrect):
+    actual = np.load(actual_path, allow_pickle=False)
+    require(
+        actual.dtype == np.int64
+        and np.array_equal(actual, np.array(incorrect, dtype=np.int64)),
+        name + ": control failed for an unexpected reason",
+    )
+    input_path = out / (name + "-input.npy")
+    np.save(input_path, input_values)
+    oracle = (
+        "import numpy as np,sys; values=np.load(sys.argv[1],allow_pickle=False); "
+        "actual=np.load(sys.argv[2],allow_pickle=False); "
+        "expected=np.array(sorted(range(values.size),key=values.__getitem__),dtype=np.int64); "
+        "ok=actual.dtype==expected.dtype and actual.shape==expected.shape and np.array_equal(actual,expected); "
+        'print("correct output" if ok else "incorrect ordering: " + repr(actual.tolist()) + " != " + repr(expected.tolist())); '
+        "sys.exit(0 if ok else 1)"
+    )
+    result = command(
+        name + "-oracle",
+        [sys.executable, "-c", oracle, input_path, actual_path],
+        "oracle",
+        status=1,
+    )
+    require(
+        "incorrect ordering:" in result.stdout and "[1, 2, 0]" in result.stdout,
+        name + ": independent oracle failed for an unrelated reason",
+    )
+    report["runs"][-1]["outcome"] = "expected independent-oracle rejection"
+
+
+flags = [
+    "--iree-hal-target-backends=llvm-cpu",
+    "--iree-llvmcpu-target-cpu=generic",
+    "--mlir-disable-threading",
+]
+fixture = source / "tests/e2e/regression/argsort_dynamic.mlir"
+try:
+    # Literal baseline production with identical candidate fixtures overlaid.
+    for name in final_files:
+        (source / name).write_bytes(
+            subprocess.check_output(
+                ["git", "-C", str(source), "show", identity["base"] + ":" + name]
+            )
+        )
+    changed = subprocess.check_output(
+        ["git", "-C", str(source), "diff", "--name-only", identity["base"]], text=True
+    ).splitlines()
+    allowed = {
+        "tests/e2e/regression/BUILD.bazel",
+        "tests/e2e/regression/CMakeLists.txt",
+        *[
+            "tests/e2e/regression/" + name + ".mlir"
+            for name in (
+                "argsort_dynamic",
+                "argsort_preserve_input_dynamic",
+                "argsort_comparator_lanes_dynamic",
+                "argsort_views_dynamic",
+                "argsort_internal_key_use",
+                "argsort_local_keys",
+                "two_sorts_original_version",
+            )
+        ],
+        "compiler/src/iree/compiler/DispatchCreation/test/convert_region_to_workgroups.mlir",
+        "compiler/src/iree/compiler/DispatchCreation/test/dispatch_linalg_on_tensors.mlir",
+        "compiler/src/iree/compiler/Codegen/Common/test/iree_comprehensive_bufferize.mlir",
+        "compiler/src/iree/compiler/Dialect/LinalgExt/Transforms/test/tiling.mlir",
+    }
+    require(
+        set(changed) <= allowed,
+        "baseline overlay has an unexpected production difference",
+    )
+    command("baseline-build", ["ninja", "-C", build, "-j2", "iree-compile"], "build")
+    result = command(
+        "baseline-compile",
+        [
+            compiler,
+            fixture,
+            *flags,
+            "--mlir-print-ir-before=iree-dispatch-creation-convert-dispatch-regions-to-workgroups",
+            "--mlir-print-ir-after=iree-dispatch-creation-convert-dispatch-regions-to-workgroups,iree-codegen-iree-comprehensive-bufferize",
+            "-o",
+            out / "baseline.vmfb",
+        ],
+        "compile",
+        status=1,
+    )
+    require(
+        "'memref.alloca' op expected no unbounded stack allocations" in result.stderr,
+        "baseline failed for an unrelated reason",
+    )
+    report["runs"][-1][
+        "outcome"
+    ] = "expected semantic allocation failure; build succeeded"
+    report["baseline_production"] = (
+        "matches literal base "
+        + identity["base"]
+        + "; fixtures overlaid from "
+        + identity["head"]
+    )
+
+    # Preserve allocation/working roles and deterministically destroy initialization.
+    restore()
+    text = final_files[relative].decode()
+    pattern = r"linalg::CopyOp::create\(rewriter, sortOp.getLoc\(\), ValueRange\{source\},\s*ValueRange\{allocation.getResult\(\)\}\);"
+    text = text.replace(
+        '#include "mlir/Dialect/Affine/IR/AffineOps.h"',
+        '#include "mlir/Dialect/Affine/IR/AffineOps.h"\n#include "mlir/Dialect/Arith/IR/Arith.h"',
+    )
+    text, count = re.subn(
+        pattern,
+        """linalg::FillOp::create(rewriter, sortOp.getLoc(),
+              ValueRange{arith::ConstantOp::create(rewriter, sortOp.getLoc(),
+                  rewriter.getZeroAttr(type.getElementType())).getResult()},
+              ValueRange{allocation.getResult()});""",
+        text,
+    )
+    require(count == 1, "initialization mutation anchor changed")
+    cpp.write_text(text)
+    command(
+        "zero-initialization-build",
+        ["ninja", "-C", build, "-j2", "iree-compile"],
+        "build",
+    )
+    command(
+        "zero-initialization-compile",
+        [compiler, fixture, *flags, "-o", out / "zero.vmfb"],
+        "compile",
+    )
+    output = out / "zero-output.npy"
+    output.unlink(missing_ok=True)
+    command(
+        "zero-initialization-run",
+        [
+            runtime,
+            "--module=" + str(out / "zero.vmfb"),
+            "--device=local-sync",
+            "--function=argsort",
+            "--input=3xi64=[3 1 2]",
+            "--output=@" + str(output),
+        ],
+        "runtime",
+    )
+    reject_ordering(
+        "zero-initialization", output, np.array([3, 1, 2], dtype=np.int64), [0, 1, 2]
+    )
+
+    # Keep valid initialized storage, restore the old illegal tiling behavior.
+    restore()
+    (source / tiling_relative).write_bytes(
+        subprocess.check_output(
+            ["git", "-C", str(source), "show", identity["base"] + ":" + tiling_relative]
+        )
+    )
+    command(
+        "partial-sort-build", ["ninja", "-C", build, "-j2", "iree-compile"], "build"
+    )
+    internal = source / "tests/e2e/regression/argsort_internal_key_use.mlir"
+    command(
+        "partial-sort-compile",
+        [
+            compiler,
+            internal,
+            *flags,
+            "--mlir-print-ir-after=iree-codegen-iree-comprehensive-bufferize",
+            "-o",
+            out / "partial-sort.vmfb",
+        ],
+        "compile",
+    )
+    output = out / "partial-sort-output.npy"
+    output.unlink(missing_ok=True)
+    command(
+        "partial-sort-run",
+        [
+            runtime,
+            "--module=" + str(out / "partial-sort.vmfb"),
+            "--device=local-sync",
+            "--function=argsort_internal_key_use",
+            "--input=3xi64=[3 1 2]",
+            "--output=@" + str(output),
+            "--output=@" + str(out / "partial-sort-sum.npy"),
+            "--output=@" + str(out / "partial-sort-original.npy"),
+        ],
+        "runtime",
+    )
+    reject_ordering(
+        "partial-sort", output, np.array([3, 1, 2], dtype=np.int64), [1, 0, 2]
+    )
+
+    # Restore the former yielded/sole-use shortcut while keeping valid storage
+    # for the nonescaping roles. The original input must now be corrupted.
+    restore()
+    cpp.write_bytes(
+        subprocess.check_output(
+            [
+                "git",
+                "-C",
+                str(source),
+                "show",
+                "b566531c8fcdfef29bc72c497a8305e7914159fe:" + relative,
+            ]
+        )
+    )
+    command(
+        "borrowed-preservation-build",
+        ["ninja", "-C", build, "-j2", "iree-compile"],
+        "build",
+    )
+    lanes = source / "tests/e2e/regression/argsort_comparator_lanes_dynamic.mlir"
+    command(
+        "borrowed-preservation-compile",
+        [compiler, lanes, *flags, "-o", out / "borrowed-preservation.vmfb"],
+        "compile",
+    )
+    output = out / "borrowed-preservation-original.npy"
+    output.unlink(missing_ok=True)
+    command(
+        "borrowed-preservation-run",
+        [
+            runtime,
+            "--module=" + str(out / "borrowed-preservation.vmfb"),
+            "--device=local-sync",
+            "--function=sort_and_original",
+            "--input=3xi64=[3 1 2]",
+            "--output=@" + str(out / "borrowed-preservation-sorted.npy"),
+            "--output=@" + str(output),
+        ],
+        "runtime",
+    )
+    actual = np.load(output, allow_pickle=False)
+    require(
+        actual.dtype == np.int64
+        and actual.shape == (3,)
+        and np.array_equal(actual, np.array([1, 2, 3], dtype=np.int64)),
+        "borrowed storage control failed for an unexpected reason",
+    )
+    oracle = (
+        "import numpy as np,sys; actual=np.load(sys.argv[1],allow_pickle=False); "
+        "original=np.array([3,1,2],dtype=np.int64); "
+        "ok=actual.dtype==original.dtype and actual.shape==original.shape and np.array_equal(actual,original); "
+        'print("input preserved" if ok else "input changed: " + repr(actual.tolist())); '
+        "sys.exit(0 if ok else 1)"
+    )
+    result = command(
+        "borrowed-preservation-oracle",
+        [sys.executable, "-c", oracle, output],
+        "oracle",
+        status=1,
+    )
+    require(
+        "input changed: [1, 2, 3]" in result.stdout,
+        "borrowed storage oracle failed for an unrelated reason",
+    )
+    report["runs"][-1][
+        "outcome"
+    ] = "expected independent-oracle rejection of input corruption"
+    report["controls"] = "pass"
+finally:
+    restore()
+    command(
+        "restore-build",
+        [
+            "ninja",
+            "-C",
+            build,
+            "-j2",
+            "iree-compile",
+            "iree-opt",
+            "iree-run-module",
+            "iree-run-mlir",
+            "FileCheck",
+        ],
+        "build",
+    )
+    diff = subprocess.run(
+        ["git", "-C", str(source), "diff", "--exit-code"],
+        capture_output=True,
+        text=True,
+    )
+    require(diff.returncode == 0, "source restoration left a diff")
+    require(
+        subprocess.check_output(
+            ["git", "-C", str(source), "rev-parse", "HEAD"], text=True
+        ).strip()
+        == identity["head"],
+        "source restoration changed HEAD",
+    )
+    report["restored"] = True
+    save()
+require(
+    report.get("controls") == "pass" and report["restored"],
+    "source controls incomplete",
+)
+report["verdict"] = "pass"
+save()
+print(
+    json.dumps(
+        {
+            "verdict": "pass",
+            "controls": 4,
+            "source_restored": True,
+            "head": identity["head"],
+        }
+    )
+)

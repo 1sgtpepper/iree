@@ -1,0 +1,10 @@
+{
+  "head": "59201b95789d75836fbabc36eccc6b8b5abdddfa",
+  "tree": "35d5e0a39cf903cbf642f2bb29ceba9584285ffe",
+  "base": "6ec253ad4e259ad256c8a226f7a7a330debf937c",
+  "submodules": {
+    "third_party/llvm-project": "53e39b225bd164efeae02c9a0721021469d5bc67",
+    "third_party/flatcc": "9362cd00f0007d8cbee7bff86e90fb4b6b227ff3",
+    "third_party/musl": "3f701faace7addc75d16dea8a6cd769fa5b3f260"
+  }
+}

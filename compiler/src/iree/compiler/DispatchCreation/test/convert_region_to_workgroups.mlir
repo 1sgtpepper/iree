@@ -438,3 +438,71 @@ util.func public @sort_dead_comparator_user(
   }
   util.return %result : tensor<?xi64>
 }
+
+// -----
+
+util.func private @produce_keys() -> tensor<4xi64>
+
+// An effectful initializer must remain in its original dispatch.
+// CHECK-LABEL: util.func public @sort_effectful_initializer
+// CHECK-NOT: flow.tensor.alloca
+// CHECK: flow.dispatch.workgroups
+// CHECK: util.call @produce_keys
+// CHECK: iree_linalg_ext.sort
+// CHECK-NOT: flow.dispatch.workgroups
+// CHECK: util.return
+util.func public @sort_effectful_initializer(%indices: tensor<4xi64>) -> tensor<4xi64> {
+  %result = flow.dispatch.region -> (tensor<4xi64>) {
+    %keys = util.call @produce_keys() : () -> tensor<4xi64>
+    %sorted:2 = iree_linalg_ext.sort dimension(0)
+        outs(%keys, %indices : tensor<4xi64>, tensor<4xi64>) {
+    ^bb0(%lhs: i64, %rhs: i64, %lhs_index: i64, %rhs_index: i64):
+      %cmp = arith.cmpi sle, %lhs, %rhs : i64
+      iree_linalg_ext.yield %cmp : i1
+    } -> tensor<4xi64>, tensor<4xi64>
+    flow.return %sorted#1 : tensor<4xi64>
+  }
+  util.return %result : tensor<4xi64>
+}
+
+// -----
+
+// Dispatch results cannot export a scalar shared by the initializer/consumer.
+// CHECK-LABEL: util.func public @sort_scalar_initializer_use
+// CHECK-NOT: flow.tensor.alloca
+// CHECK: flow.dispatch.workgroups
+// CHECK: linalg.generic
+// CHECK: iree_linalg_ext.sort
+// CHECK: linalg.generic
+// CHECK-NOT: flow.dispatch.workgroups
+// CHECK: util.return
+util.func public @sort_scalar_initializer_use(%indices: tensor<4xi64>) -> tensor<4xi64> {
+  %result = flow.dispatch.region -> (tensor<4xi64>) {
+    %offset = arith.constant 100 : i64
+    %empty = tensor.empty() : tensor<4xi64>
+    %keys = linalg.generic {
+        indexing_maps = [affine_map<(d0) -> (d0)>],
+        iterator_types = ["parallel"]} outs(%empty : tensor<4xi64>) {
+    ^bb0(%out: i64):
+      %index = linalg.index 0 : index
+      %value = arith.index_cast %index : index to i64
+      %key = arith.subi %offset, %value : i64
+      linalg.yield %key : i64
+    } -> tensor<4xi64>
+    %sorted:2 = iree_linalg_ext.sort dimension(0)
+        outs(%keys, %indices : tensor<4xi64>, tensor<4xi64>) {
+    ^bb0(%lhs: i64, %rhs: i64, %lhs_index: i64, %rhs_index: i64):
+      %cmp = arith.cmpi sle, %lhs, %rhs : i64
+      iree_linalg_ext.yield %cmp : i1
+    } -> tensor<4xi64>, tensor<4xi64>
+    %combined = linalg.generic {
+        indexing_maps = [affine_map<(d0) -> (d0)>],
+        iterator_types = ["parallel"]} outs(%sorted#1 : tensor<4xi64>) {
+    ^bb0(%index: i64):
+      %value = arith.addi %offset, %index : i64
+      linalg.yield %value : i64
+    } -> tensor<4xi64>
+    flow.return %combined : tensor<4xi64>
+  }
+  util.return %result : tensor<4xi64>
+}

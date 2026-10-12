@@ -1,40 +1,107 @@
-# Copyright 2024 The IREE Authors
+# Copyright 2026 The IREE Authors
 #
 # Licensed under the Apache License v2.0 with LLVM Exceptions.
 # See https://llvm.org/LICENSE.txt for license information.
 # SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
-name: CI - Linux x64 clang BYO LLVM
+name: Validate Sort workspace ownership
 
 on:
-  schedule:
-    # Weekday mornings at 09:15 UTC = 01:15 PST (UTC - 8).
-    - cron: "15 9 * * 1-5"
   workflow_dispatch:
-  workflow_call:
+
+permissions:
+  contents: read
+
+env:
+  SOURCE_SHA: 59201b95789d75836fbabc36eccc6b8b5abdddfa
+  CCACHE_DIR: ${{ github.workspace }}/compiler-cache
+  CCACHE_BASEDIR: ${{ github.workspace }}
+  CCACHE_MAXSIZE: 3G
 
 jobs:
-  linux_x64_clang_byollvm:
-    if: ${{ github.repository_owner == 'iree-org' || github.event_name != 'schedule' }}
+  cpu:
+    if: github.repository == '1sgtpepper/iree'
     runs-on: ubuntu-24.04
-    container: ghcr.io/iree-org/cpubuilder_ubuntu_jammy@sha256:78a558b999b230f7e1da376639e14b44f095f30f1777d6a272ba48c0bbdd4ccb
+    timeout-minutes: 360
     defaults:
       run:
         shell: bash
     steps:
-      - name: "Checking out repository"
+      - name: Check out validation harness
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          submodules: true
-      - name: Install Python requirements
-        run: python3 -m pip install -r ./build_tools/github_actions/ci_requirements.txt
-      - name: "Building and testing with bring-your-own-LLVM"
-        run: ./build_tools/cmake/build_and_test_byo_llvm.sh
+          path: ci-support
+          persist-credentials: false
 
-      - name: Post to Discord on Failure
-        uses: sarisia/actions-status-discord@eb045afee445dc055c18d3d90bd0f244fd062708 # v1.16.0
-        if: failure() && github.ref_name == 'main' && github.repository_owner == 'iree-org'
+      - name: Check out exact compiler source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          webhook: ${{ secrets.DISCORD_WEBHOOK }}
-          description: "The ${{ github.workflow }} workflow failed"
-          url: "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}/attempts/${{ github.run_attempt }}"
+          ref: ${{ env.SOURCE_SHA }}
+          path: source
+          fetch-depth: 40
+          persist-credentials: false
+
+      - name: Prepare evidence and verify source
+        run: |
+          cp -a ci-support/.github/sort-workspace-validation suite
+          mkdir -p suite/evidence
+          test "$(git -C source rev-parse HEAD)" = "${SOURCE_SHA}"
+          test "$(git -C source rev-parse HEAD^{tree})" = "35d5e0a39cf903cbf642f2bb29ceba9584285ffe"
+          git -C source cat-file -e 6ec253ad4e259ad256c8a226f7a7a330debf937c^{commit}
+          git -C source cat-file -e b566531c8fcdfef29bc72c497a8305e7914159fe^{commit}
+
+      - name: Initialize required pinned submodules
+        run: |
+          git -C source submodule update --init --depth=1 \
+            third_party/llvm-project third_party/flatcc third_party/musl \
+            2>&1 | tee suite/evidence/submodules.log
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+
+      - name: Install CPU build and oracle prerequisites
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang ccache ninja-build
+          python3 -m venv suite/.venv
+          suite/.venv/bin/python -m pip install -r suite/requirements.txt
+          {
+            /usr/bin/clang --version
+            cmake --version
+            ninja --version
+            suite/.venv/bin/python --version
+            suite/.venv/bin/python -m pip freeze
+            free -h
+            df -h .
+          } > suite/evidence/environment.log
+
+      - name: Restore compiler cache
+        id: cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ env.CCACHE_DIR }}
+          key: sort-workspace-cpu-v1-ubuntu24-clang18-O1-53e39b225bd1-${{ github.sha }}
+          restore-keys: |
+            sort-workspace-cpu-v1-ubuntu24-clang18-O1-53e39b225bd1-
+
+      - name: Build exact source and run every required check
+        run: |
+          bash suite/validation/validate.sh 2>&1 | tee suite/evidence/final-validation.log
+
+      - name: Save compiler cache
+        if: always() && steps.cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ env.CCACHE_DIR }}
+          key: ${{ steps.cache.outputs.cache-primary-key }}
+
+      - name: Upload validation evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: sort-workspace-cpu-evidence
+          path: suite/evidence
+          if-no-files-found: error
+          retention-days: 30

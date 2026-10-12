@@ -11,7 +11,14 @@ source controls. Build failures, missing checks, unrelated diagnostics, stale
 reports, and escaped controls fail the run. The final source is restored and the
 positive suites run again after the controls.
 
-The workflow runs on push to `validation/sort-workspace-cpu` in this fork. Its
+Run the registered manual workflow against this validation branch:
+
+```bash
+gh workflow run ci_linux_x64_clang_byollvm.yml --repo 1sgtpepper/iree --ref validation/sort-workspace-cpu
+```
+
+Only this branch overrides the existing workflow entry with the focused suite.
+The fork default branch is unchanged. Its
 `sort-workspace-cpu-evidence` artifact includes the final verdict, source and
 compiler identities, command logs, runtime outputs, and intermediate IR.
 

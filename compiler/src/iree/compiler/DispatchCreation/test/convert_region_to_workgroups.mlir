@@ -57,8 +57,10 @@ util.global private @device : !hal.device
 // CHECK-SAME: -> %[[KEY_STORAGE]]
 // CHECK-SAME: stream.affinity = #hal.device.affinity<@device>
 // CHECK: linalg.copy
+// CHECK: %[[LABELS:.+]] = flow.dispatch.workgroups
+// CHECK: linalg.copy
 // CHECK-NOT: linalg.copy
-// CHECK: %[[SORT_DISPATCH:.+]]:2 = flow.dispatch.workgroups[%{{.+}}](%[[KEYS]], %[[LABELS:[a-zA-Z0-9_]+]],
+// CHECK: %[[SORT_DISPATCH:.+]]:2 = flow.dispatch.workgroups[%{{.+}}](%[[KEYS]], %[[LABELS]],
 // CHECK-SAME: -> (%[[LABELS]]{{.*}}, %[[KEYS]]{{.*}})
 // CHECK-SAME: stream.affinity = #hal.device.affinity<@device>
 // CHECK: iree_linalg_ext.sort dimension(0)
@@ -89,7 +91,7 @@ util.func public @sort_unused_comparator_workspace(
 
 // -----
 // CHECK-LABEL: util.func public @sort_preserves_internal_key_view
-// CHECK: linalg.copy
+// CHECK-COUNT-2: linalg.copy
 // CHECK-NOT: linalg.copy
 // CHECK: %[[DISPATCH:.+]]:2 = flow.dispatch.workgroups
 // CHECK: !iree_tensor_ext.dispatch.tensor<readonly:tensor<4xi64>>
@@ -134,8 +136,10 @@ util.func public @sort_preserves_internal_key_view(
 // CHECK: %[[KEY1:.+]] = flow.dispatch.workgroups
 // CHECK-SAME: -> %[[STORAGE1]]
 // CHECK: linalg.copy
+// CHECK: %[[LABELS:.+]] = flow.dispatch.workgroups
+// CHECK: linalg.copy
 // CHECK-NOT: linalg.copy
-// CHECK: %[[DISPATCH:.+]]:3 = flow.dispatch.workgroups(%[[KEY0]], %[[KEY1]], %[[LABELS:[a-zA-Z0-9_]+]])
+// CHECK: %[[DISPATCH:.+]]:3 = flow.dispatch.workgroups(%[[KEY0]], %[[KEY1]], %[[LABELS]])
 // CHECK-SAME: -> (%[[LABELS]], %[[KEY0]], %[[KEY1]])
 // CHECK: iree_linalg_ext.sort dimension(0)
 // CHECK-COUNT-3: iree_tensor_ext.dispatch.tensor.store
@@ -187,6 +191,7 @@ util.func public @sort_trailing_rhs_comparator(
 // -----
 // Returning both lanes must not add duplicate hidden results.
 // CHECK-LABEL: util.func public @sort_returned_keys
+// CHECK-COUNT-2: linalg.copy
 // CHECK-NOT: linalg.copy
 // CHECK: %[[DISPATCH:.+]]:2 = flow.dispatch.workgroups
 // CHECK: iree_linalg_ext.sort dimension(0)
@@ -209,6 +214,7 @@ util.func public @sort_returned_keys(%keys: tensor<4xi64>, %indices: tensor<4xi6
 // -----
 // An unused noncomparator lane needs no storage or initialization.
 // CHECK-LABEL: util.func public @sort_unused_noncomparator_lane
+// CHECK: linalg.copy
 // CHECK-NOT: linalg.copy
 // CHECK: iree_linalg_ext.sort dimension(0) outs(%{{.+}} : tensor<4xi64>)
 // CHECK-NOT: linalg.copy
@@ -233,6 +239,7 @@ util.func public @sort_unused_noncomparator_lane(
 // CHECK: %[[KEYS:.+]] = flow.dispatch.workgroups
 // CHECK: linalg.generic
 // CHECK: iree_tensor_ext.dispatch.tensor.store
+// CHECK: linalg.copy
 // CHECK-NOT: linalg.copy
 // CHECK: %[[DISPATCH:.+]]:2 = flow.dispatch.workgroups(%[[KEYS]],
 // CHECK: iree_linalg_ext.sort dimension(0)
@@ -313,7 +320,7 @@ util.func public @shape_only_sort(%keys: tensor<4xi64>, %indices: tensor<4xi64>)
 // -----
 // Shape queries must not break the workspace tie.
 // CHECK-LABEL: util.func public @sort_key_shape_use
-// CHECK: linalg.copy
+// CHECK-COUNT-2: linalg.copy
 // CHECK-NOT: linalg.copy
 // CHECK: %[[DISPATCH:.+]]:3 = flow.dispatch.workgroups
 // CHECK: iree_linalg_ext.sort dimension(0)
@@ -345,8 +352,7 @@ util.func public @sort_key_shape_use(%keys: tensor<?xi64>, %indices: tensor<?xi6
 // -----
 // The second Sort must start from the original tensor version.
 // CHECK-LABEL: util.func public @two_sorts_shared_source
-// CHECK: linalg.copy
-// CHECK: linalg.copy
+// CHECK-COUNT-4: linalg.copy
 // CHECK-NOT: linalg.copy
 // CHECK: %[[DISPATCH:.+]]:4 = flow.dispatch.workgroups
 // CHECK: iree_linalg_ext.sort dimension(0)
@@ -412,7 +418,7 @@ util.func public @sort_dead_internal_chain(
 // -----
 // Dead comparator uses must not keep an unused lane alive.
 // CHECK-LABEL: util.func public @sort_dead_comparator_user
-// CHECK: linalg.copy
+// CHECK-COUNT-2: linalg.copy
 // CHECK-NOT: linalg.copy
 // CHECK: %[[DISPATCH:.+]]:2 = flow.dispatch.workgroups
 // CHECK: iree_linalg_ext.sort dimension(0)
@@ -445,6 +451,7 @@ util.func private @produce_keys() -> tensor<4xi64>
 
 // An effectful initializer must remain in its original dispatch.
 // CHECK-LABEL: util.func public @sort_effectful_initializer
+// CHECK: linalg.copy
 // CHECK-NOT: flow.tensor.alloca
 // CHECK: flow.dispatch.workgroups
 // CHECK: util.call @produce_keys
@@ -469,6 +476,7 @@ util.func public @sort_effectful_initializer(%indices: tensor<4xi64>) -> tensor<
 
 // Dispatch results cannot export a scalar shared by the initializer/consumer.
 // CHECK-LABEL: util.func public @sort_scalar_initializer_use
+// CHECK: linalg.copy
 // CHECK-NOT: flow.tensor.alloca
 // CHECK: flow.dispatch.workgroups
 // CHECK: linalg.generic

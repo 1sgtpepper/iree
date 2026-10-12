@@ -5,6 +5,8 @@
 // RUN: iree-run-mlir --Xcompiler,iree-hal-target-device=local --Xcompiler,iree-hal-local-target-device-backends=llvm-cpu --Xcompiler,iree-llvmcpu-target-cpu=generic %s --function=argsort_shared_keys --input="0xi64" | FileCheck %s --check-prefix=EMPTY
 // RUN: iree-run-mlir --Xcompiler,iree-hal-target-device=local --Xcompiler,iree-hal-local-target-device-backends=llvm-cpu --Xcompiler,iree-llvmcpu-target-cpu=generic %s --function=sort_carried_labels --input="2xi64=[2 1]" --input="2xi64=[1 0]" | FileCheck %s --check-prefix=LABELS
 // RUN: iree-run-mlir --Xcompiler,iree-hal-target-device=local --Xcompiler,iree-hal-local-target-device-backends=llvm-cpu --Xcompiler,iree-llvmcpu-target-cpu=generic %s --function=sort_carried_labels --input="2xi64=[2 1]" --input="2xi64=[7 -3]" | FileCheck %s --check-prefix=NONINDICES
+// RUN: iree-run-mlir --Xcompiler,iree-hal-target-backends=llvm-cpu --Xcompiler,iree-llvmcpu-target-cpu=generic %s --function=sort_and_original --input="3xi64=[3 1 2]" | FileCheck %s --check-prefix=ORIGINAL
+// RUN: iree-run-mlir --Xcompiler,iree-hal-target-backends=llvm-cpu --Xcompiler,iree-llvmcpu-target-cpu=generic %s --function=sort_and_original --input="0xi64" | FileCheck %s --check-prefix=ZERO
 
 #identity = affine_map<(d0) -> (d0)>
 
@@ -59,14 +61,26 @@ func.func @argsort_shared_keys(%input: tensor<?xi64>)
 
 // Carried values are labels; they need not identify positions in the keys.
 func.func @sort_carried_labels(%keys: tensor<?xi64>, %labels: tensor<?xi64>)
-    -> tensor<?xi64> {
+    -> (tensor<?xi64>, tensor<?xi64>, tensor<?xi64>) {
   %sorted:2 = iree_linalg_ext.sort dimension(0)
       outs(%keys, %labels : tensor<?xi64>, tensor<?xi64>) {
   ^bb0(%lhs: i64, %rhs: i64, %lhs_label: i64, %rhs_label: i64):
     %cmp = arith.cmpi sle, %lhs, %rhs : i64
     iree_linalg_ext.yield %cmp : i1
   } -> tensor<?xi64>, tensor<?xi64>
-  return %sorted#1 : tensor<?xi64>
+  return %sorted#1, %keys, %labels
+      : tensor<?xi64>, tensor<?xi64>, tensor<?xi64>
+}
+
+// A sole tensor use does not transfer ownership of the input buffer.
+func.func @sort_and_original(%input: tensor<?xi64>)
+    -> (tensor<?xi64>, tensor<?xi64>) {
+  %sorted = iree_linalg_ext.sort dimension(0) outs(%input : tensor<?xi64>) {
+  ^bb0(%lhs: i64, %rhs: i64):
+    %cmp = arith.cmpi sle, %lhs, %rhs : i64
+    iree_linalg_ext.yield %cmp : i1
+  } -> tensor<?xi64>
+  return %sorted, %input : tensor<?xi64>, tensor<?xi64>
 }
 
 // TRAILING-LABEL: EXEC @argsort_trailing_float_keys
@@ -84,5 +98,15 @@ func.func @sort_carried_labels(%keys: tensor<?xi64>, %labels: tensor<?xi64>)
 // EMPTY: 0xi64=
 // LABELS-LABEL: EXEC @sort_carried_labels
 // LABELS: 2xi64=0 1
+// LABELS: 2xi64=2 1
+// LABELS: 2xi64=1 0
 // NONINDICES-LABEL: EXEC @sort_carried_labels
 // NONINDICES: 2xi64=-3 7
+// NONINDICES: 2xi64=2 1
+// NONINDICES: 2xi64=7 -3
+// ORIGINAL-LABEL: EXEC @sort_and_original
+// ORIGINAL: 3xi64=1 2 3
+// ORIGINAL: 3xi64=3 1 2
+// ZERO-LABEL: EXEC @sort_and_original
+// ZERO: 0xi64=
+// ZERO: 0xi64=

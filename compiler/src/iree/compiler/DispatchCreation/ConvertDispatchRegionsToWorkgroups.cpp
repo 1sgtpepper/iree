@@ -196,14 +196,6 @@ convertDispatchRegionWithSortWorkspaces(IREE::Flow::DispatchRegionOp &regionOp,
         }
         source = *initialized;
       }
-      // Existing yielded roles retain ordinary ties when the source has no
-      // other data use. Bufferization can update that binding in place.
-      if (yieldedValues.contains(result) &&
-          llvm::all_of(source.getUses(), [&](OpOperand &use) {
-            return &use == &init || isa<tensor::DimOp>(use.getOwner());
-          })) {
-        continue;
-      }
       auto producer = source.getDefiningOp<IREE::Flow::DispatchWorkgroupsOp>();
       if (producer &&
           !cast<IREE::Util::TiedOpInterface>(producer.getOperation())
@@ -211,8 +203,8 @@ convertDispatchRegionWithSortWorkspaces(IREE::Flow::DispatchRegionOp &regionOp,
           llvm::all_of(source.getUses(), [&](OpOperand &use) {
             return &use == &init || isa<tensor::DimOp>(use.getOwner());
           })) {
-        // An untied producer result used only here already owns its
-        // destination.
+        // This untied producer owns its destination. A captured tensor can
+        // still have caller-visible storage despite having one data use.
         if (!yieldedValues.contains(result)) {
           rewriter.setInsertionPoint(regionOp);
           workspaceResults.push_back(result);

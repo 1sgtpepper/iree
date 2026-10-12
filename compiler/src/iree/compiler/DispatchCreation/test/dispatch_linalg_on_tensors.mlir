@@ -2,18 +2,14 @@
 
 // CHECK-LABEL: util.func public @argsort_unused_comparator_workspace(
 // CHECK-SAME: %[[INPUT:[a-zA-Z0-9_]+]]: tensor<?xi64>
-// CHECK: tensor.dim %[[INPUT]]
+// CHECK: flow.tensor.alloca
+// CHECK: linalg.copy
+// CHECK-NOT: linalg.copy
 // CHECK: %[[DISPATCH:.+]]:2 = flow.dispatch.workgroups
-// CHECK: %[[KEY_BINDING:[a-zA-Z0-9_]+]]: !iree_tensor_ext.dispatch.tensor<readonly:tensor<?xi64>>
-// CHECK-SAME: %[[INDEX_BINDING:[a-zA-Z0-9_]+]]: !iree_tensor_ext.dispatch.tensor<readwrite:tensor<?xi64>>
-// CHECK-SAME: %[[WORKSPACE:[a-zA-Z0-9_]+]]: !iree_tensor_ext.dispatch.tensor<readwrite:tensor<?xi64>>
-// CHECK-DAG: %[[KEYS:.+]] = iree_tensor_ext.dispatch.tensor.load %[[KEY_BINDING]]
-// CHECK-DAG: %[[INDICES:.+]] = iree_tensor_ext.dispatch.tensor.load %[[INDEX_BINDING]]
-// CHECK: %[[DEST:.+]] = iree_tensor_ext.dispatch.tensor.load %[[WORKSPACE]]
-// CHECK: %[[COPY:.+]] = linalg.copy ins(%[[KEYS]] : tensor<?xi64>) outs(%[[DEST]] : tensor<?xi64>)
-// CHECK: %[[SORT:.+]]:2 = iree_linalg_ext.sort dimension(0) outs(%[[COPY]], %[[INDICES]]
-// CHECK: iree_tensor_ext.dispatch.tensor.store %[[SORT]]#1, %[[INDEX_BINDING]]
-// CHECK: iree_tensor_ext.dispatch.tensor.store %[[SORT]]#0, %[[WORKSPACE]]
+// CHECK: !iree_tensor_ext.dispatch.tensor<readwrite:tensor<?xi64>>
+// CHECK-SAME: !iree_tensor_ext.dispatch.tensor<readwrite:tensor<?xi64>>
+// CHECK: iree_linalg_ext.sort dimension(0)
+// CHECK-COUNT-2: iree_tensor_ext.dispatch.tensor.store
 // CHECK: util.return %[[DISPATCH]]#0, %[[INPUT]]
 util.func public @argsort_unused_comparator_workspace(
     %keys: tensor<?xi64>, %indices: tensor<?xi64>)

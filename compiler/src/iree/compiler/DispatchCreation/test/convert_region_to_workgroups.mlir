@@ -49,25 +49,23 @@ util.func public @foo(%argA: tensor<?x?xf32>, %argB: tensor<5x10xf32>, %argC: te
 }
 
 // -----
-
 util.global private @device : !hal.device
 
 // CHECK-LABEL: util.func public @sort_unused_comparator_workspace
-// CHECK: %[[DISPATCH:.+]]:2 = flow.dispatch.workgroups
+// CHECK: %[[KEY_STORAGE:.+]] = flow.tensor.alloca
+// CHECK: %[[KEYS:.+]] = flow.dispatch.workgroups
+// CHECK-SAME: -> %[[KEY_STORAGE]]
 // CHECK-SAME: stream.affinity = #hal.device.affinity<@device>
-// CHECK: %[[KEY_BINDING:[a-zA-Z0-9_]+]]: !iree_tensor_ext.dispatch.tensor<readonly:tensor<?xi64>>
-// CHECK-SAME: %[[INDEX_BINDING:[a-zA-Z0-9_]+]]: !iree_tensor_ext.dispatch.tensor<readwrite:tensor<?xi64>>
-// CHECK-SAME: %[[WORKSPACE:[a-zA-Z0-9_]+]]: !iree_tensor_ext.dispatch.tensor<readwrite:tensor<?xi64>>
-// CHECK-DAG: %[[KEYS:.+]] = iree_tensor_ext.dispatch.tensor.load %[[KEY_BINDING]]
-// CHECK-DAG: %[[INDICES:.+]] = iree_tensor_ext.dispatch.tensor.load %[[INDEX_BINDING]]
-// CHECK: %[[DEST:.+]] = iree_tensor_ext.dispatch.tensor.load %[[WORKSPACE]]
-// CHECK: %[[COPY:.+]] = linalg.copy ins(%[[KEYS]] : tensor<?xi64>) outs(%[[DEST]] : tensor<?xi64>)
-// CHECK: %[[SORT:.+]]:2 = iree_linalg_ext.sort dimension(0) outs(%[[COPY]], %[[INDICES]]
-// CHECK: iree_tensor_ext.dispatch.tensor.store %[[SORT]]#1, %[[INDEX_BINDING]]
-// CHECK: iree_tensor_ext.dispatch.tensor.store %[[SORT]]#0, %[[WORKSPACE]]
-// CHECK: count(%[[COUNT_ARG:.+]]: index)
-// CHECK: flow.return %[[COUNT_ARG]], %{{.+}}, %{{.+}} : index, index, index
-// CHECK: util.return %[[DISPATCH]]#0
+// CHECK: linalg.copy
+// CHECK-NOT: linalg.copy
+// CHECK: %[[SORT_DISPATCH:.+]]:2 = flow.dispatch.workgroups[%{{.+}}](%[[KEYS]], %[[LABELS:[a-zA-Z0-9_]+]],
+// CHECK-SAME: -> (%[[LABELS]]{{.*}}, %[[KEYS]]{{.*}})
+// CHECK-SAME: stream.affinity = #hal.device.affinity<@device>
+// CHECK: iree_linalg_ext.sort dimension(0)
+// CHECK-NOT: linalg.copy
+// CHECK: count(%[[WORKLOAD:.+]]: index)
+// CHECK: flow.return %[[WORKLOAD]], %{{.+}}, %{{.+}} : index, index, index
+// CHECK: util.return %[[SORT_DISPATCH]]#0
 util.func public @sort_unused_comparator_workspace(
     %keys: tensor<?xi64>, %indices: tensor<?xi64>) -> tensor<?xi64> {
   %c0 = arith.constant 0 : index
@@ -90,21 +88,16 @@ util.func public @sort_unused_comparator_workspace(
 }
 
 // -----
-
 // CHECK-LABEL: util.func public @sort_preserves_internal_key_view
+// CHECK: linalg.copy
+// CHECK-NOT: linalg.copy
 // CHECK: %[[DISPATCH:.+]]:2 = flow.dispatch.workgroups
-// CHECK: %[[KEY_BINDING:[a-zA-Z0-9_]+]]: !iree_tensor_ext.dispatch.tensor<readonly:tensor<4xi64>>
-// CHECK-SAME: %[[INDEX_BINDING:[a-zA-Z0-9_]+]]: !iree_tensor_ext.dispatch.tensor<readwrite:tensor<4xi64>>
-// CHECK-SAME: %[[WORKSPACE:[a-zA-Z0-9_]+]]: !iree_tensor_ext.dispatch.tensor<readwrite:tensor<4xi64>>
-// CHECK: %[[KEYS:.+]] = iree_tensor_ext.dispatch.tensor.load %[[KEY_BINDING]]
-// CHECK: %[[DEST:.+]] = iree_tensor_ext.dispatch.tensor.load %[[WORKSPACE]]
-// CHECK: %[[COPY:.+]] = linalg.copy ins(%[[KEYS]] : tensor<4xi64>) outs(%[[DEST]] : tensor<4xi64>)
-// CHECK: %[[SORT:.+]]:2 = iree_linalg_ext.sort dimension(0) outs(%[[COPY]],
-// CHECK: %[[VIEW:.+]] = tensor.expand_shape %[[KEYS]]
-// CHECK: %[[COMBINED:.+]] = linalg.generic
-// CHECK-SAME: ins(%[[VIEW]] : tensor<1x4xi64>) outs(%[[SORT]]#1 : tensor<4xi64>)
-// CHECK: iree_tensor_ext.dispatch.tensor.store %[[COMBINED]], %[[INDEX_BINDING]]
-// CHECK: iree_tensor_ext.dispatch.tensor.store %[[SORT]]#0, %[[WORKSPACE]]
+// CHECK: !iree_tensor_ext.dispatch.tensor<readonly:tensor<4xi64>>
+// CHECK: iree_linalg_ext.sort dimension(0)
+// CHECK: tensor.expand_shape
+// CHECK: linalg.generic
+// CHECK-COUNT-2: iree_tensor_ext.dispatch.tensor.store
+// CHECK: util.return %[[DISPATCH]]#0
 util.func public @sort_preserves_internal_key_view(
     %keys: tensor<4xi64>, %indices: tensor<4xi64>) -> tensor<4xi64> {
   %result = flow.dispatch.region -> (tensor<4xi64>) {
@@ -131,21 +124,22 @@ util.func public @sort_preserves_internal_key_view(
 }
 
 // -----
-
-// Source equality alone does not establish legal reuse for separate init roles.
+// Equal sources have independent storage for their different working roles.
 // CHECK-LABEL: util.func public @sort_shared_comparator_sources
-// CHECK: %[[DISPATCH:.+]]:3 = flow.dispatch.workgroups
-// CHECK: %[[KEY_BINDING:[a-zA-Z0-9_]+]]: !iree_tensor_ext.dispatch.tensor<readonly:tensor<4xi64>>
-// CHECK-SAME: %[[INDEX_BINDING:[a-zA-Z0-9_]+]]: !iree_tensor_ext.dispatch.tensor<readwrite:tensor<4xi64>>
-// CHECK-SAME: %[[WORKSPACE0:[a-zA-Z0-9_]+]]: !iree_tensor_ext.dispatch.tensor<readwrite:tensor<4xi64>>
-// CHECK-SAME: %[[WORKSPACE1:[a-zA-Z0-9_]+]]: !iree_tensor_ext.dispatch.tensor<readwrite:tensor<4xi64>>
-// CHECK: %[[KEYS:.+]] = iree_tensor_ext.dispatch.tensor.load %[[KEY_BINDING]]
-// CHECK: %[[DEST0:.+]] = iree_tensor_ext.dispatch.tensor.load %[[WORKSPACE0]]
-// CHECK: %[[COPY0:.+]] = linalg.copy ins(%[[KEYS]] : tensor<4xi64>) outs(%[[DEST0]] : tensor<4xi64>)
-// CHECK: %[[DEST1:.+]] = iree_tensor_ext.dispatch.tensor.load %[[WORKSPACE1]]
-// CHECK: %[[COPY1:.+]] = linalg.copy ins(%[[KEYS]] : tensor<4xi64>) outs(%[[DEST1]] : tensor<4xi64>)
-// CHECK: %[[SORT:.+]]:3 = iree_linalg_ext.sort dimension(0) outs(%[[COPY0]], %[[COPY1]],
-// CHECK: iree_tensor_ext.dispatch.tensor.store %[[SORT]]#1, %[[WORKSPACE1]]
+// CHECK: %[[STORAGE0:.+]] = flow.tensor.alloca
+// CHECK: %[[KEY0:.+]] = flow.dispatch.workgroups
+// CHECK-SAME: -> %[[STORAGE0]]
+// CHECK: linalg.copy
+// CHECK: %[[STORAGE1:.+]] = flow.tensor.alloca
+// CHECK: %[[KEY1:.+]] = flow.dispatch.workgroups
+// CHECK-SAME: -> %[[STORAGE1]]
+// CHECK: linalg.copy
+// CHECK-NOT: linalg.copy
+// CHECK: %[[DISPATCH:.+]]:3 = flow.dispatch.workgroups(%[[KEY0]], %[[KEY1]], %[[LABELS:[a-zA-Z0-9_]+]])
+// CHECK-SAME: -> (%[[LABELS]], %[[KEY0]], %[[KEY1]])
+// CHECK: iree_linalg_ext.sort dimension(0)
+// CHECK-COUNT-3: iree_tensor_ext.dispatch.tensor.store
+// CHECK: util.return %[[DISPATCH]]#0
 util.func public @sort_shared_comparator_sources(
     %keys: tensor<4xi64>, %indices: tensor<4xi64>) -> tensor<4xi64> {
   %result = flow.dispatch.region -> (tensor<4xi64>) {
@@ -165,16 +159,14 @@ util.func public @sort_shared_comparator_sources(
 }
 
 // -----
-
 // CHECK-LABEL: util.func public @sort_trailing_rhs_comparator
+// CHECK: flow.tensor.alloca : tensor<?xf32>
+// CHECK: %[[KEYS:.+]] = flow.dispatch.workgroups
+// CHECK: linalg.copy ins(%{{.+}} : tensor<?xf32>)
 // CHECK: %[[DISPATCH:.+]]:2 = flow.dispatch.workgroups
-// CHECK: %[[KEY_BINDING:[a-zA-Z0-9_]+]]: !iree_tensor_ext.dispatch.tensor<readonly:tensor<?xf32>>
-// CHECK-SAME: %[[WORKSPACE:[a-zA-Z0-9_]+]]: !iree_tensor_ext.dispatch.tensor<readwrite:tensor<?xf32>>
-// CHECK: %[[KEYS:.+]] = iree_tensor_ext.dispatch.tensor.load %[[KEY_BINDING]]
-// CHECK: %[[DEST:.+]] = iree_tensor_ext.dispatch.tensor.load %[[WORKSPACE]]
-// CHECK: %[[COPY:.+]] = linalg.copy ins(%[[KEYS]] : tensor<?xf32>) outs(%[[DEST]] : tensor<?xf32>)
-// CHECK: %[[SORT:.+]]:2 = iree_linalg_ext.sort dimension(0) outs(%{{.+}}, %[[COPY]] : tensor<?xi64>, tensor<?xf32>)
-// CHECK: iree_tensor_ext.dispatch.tensor.store %[[SORT]]#1, %[[WORKSPACE]]
+// CHECK-SAME: -> ({{.*}}, %[[KEYS]]{{.*}})
+// CHECK: iree_linalg_ext.sort dimension(0)
+// CHECK: util.return %[[DISPATCH]]#0
 util.func public @sort_trailing_rhs_comparator(
     %indices: tensor<?xi64>, %keys: tensor<?xf32>) -> tensor<?xi64> {
   %c0 = arith.constant 0 : index
@@ -193,13 +185,12 @@ util.func public @sort_trailing_rhs_comparator(
 }
 
 // -----
-
-// Already returned destinations retain baseline ties.
+// Returning both lanes must not add duplicate hidden results.
 // CHECK-LABEL: util.func public @sort_returned_keys
+// CHECK-NOT: linalg.copy
 // CHECK: %[[DISPATCH:.+]]:2 = flow.dispatch.workgroups
-// CHECK-NOT: linalg.copy
 // CHECK: iree_linalg_ext.sort dimension(0)
-// CHECK-NOT: linalg.copy
+// CHECK-COUNT-2: iree_tensor_ext.dispatch.tensor.store
 // CHECK: util.return %[[DISPATCH]]#0, %[[DISPATCH]]#1
 util.func public @sort_returned_keys(%keys: tensor<4xi64>, %indices: tensor<4xi64>)
     -> (tensor<4xi64>, tensor<4xi64>) {
@@ -216,12 +207,12 @@ util.func public @sort_returned_keys(%keys: tensor<4xi64>, %indices: tensor<4xi6
 }
 
 // -----
-
-// Unused noncomparator lanes remain eligible for existing Sort pruning.
+// An unused noncomparator lane needs no storage or initialization.
 // CHECK-LABEL: util.func public @sort_unused_noncomparator_lane
 // CHECK-NOT: linalg.copy
 // CHECK: iree_linalg_ext.sort dimension(0) outs(%{{.+}} : tensor<4xi64>)
 // CHECK-NOT: linalg.copy
+// CHECK: util.return
 util.func public @sort_unused_noncomparator_lane(
     %keys: tensor<4xi64>, %indices: tensor<4xi64>) -> tensor<4xi64> {
   %result = flow.dispatch.region -> (tensor<4xi64>) {
@@ -237,17 +228,18 @@ util.func public @sort_unused_noncomparator_lane(
 }
 
 // -----
-
-// A local key producer is outside this captured-workspace lowering.
-// CHECK-LABEL: util.func public @sort_local_keys_unchanged
-// CHECK: flow.dispatch.workgroups
+// Move the pure initializer once; its untied result already owns storage.
+// CHECK-LABEL: util.func public @sort_local_keys
+// CHECK: %[[KEYS:.+]] = flow.dispatch.workgroups
+// CHECK: linalg.generic
+// CHECK: iree_tensor_ext.dispatch.tensor.store
 // CHECK-NOT: linalg.copy
-// CHECK: %[[EMPTY:.+]] = tensor.empty
-// CHECK: %[[KEYS:.+]] = linalg.generic
-// CHECK-SAME: outs(%[[EMPTY]] : tensor<?xi64>)
-// CHECK: iree_linalg_ext.sort dimension(0) outs(%[[KEYS]],
+// CHECK: %[[DISPATCH:.+]]:2 = flow.dispatch.workgroups(%[[KEYS]],
+// CHECK: iree_linalg_ext.sort dimension(0)
+// CHECK-NOT: linalg.generic
 // CHECK-NOT: linalg.copy
-util.func public @sort_local_keys_unchanged(%indices: tensor<?xi64>)
+// CHECK: util.return %[[DISPATCH]]#0
+util.func public @sort_local_keys(%indices: tensor<?xi64>)
     -> tensor<?xi64> {
   %c0 = arith.constant 0 : index
   %n = tensor.dim %indices, %c0 : tensor<?xi64>
@@ -273,8 +265,8 @@ util.func public @sort_local_keys_unchanged(%indices: tensor<?xi64>)
 }
 
 // -----
-
 // CHECK-LABEL: util.func public @dead_sort
+// CHECK-NOT: flow.tensor.alloca
 // CHECK-NOT: linalg.copy
 // CHECK-NOT: iree_linalg_ext.sort
 // CHECK: util.return
@@ -292,8 +284,8 @@ util.func public @dead_sort(%keys: tensor<4xi64>, %indices: tensor<4xi64>) {
 }
 
 // -----
-
 // CHECK-LABEL: util.func public @shape_only_sort
+// CHECK-NOT: flow.tensor.alloca
 // CHECK-NOT: linalg.copy
 // CHECK-NOT: iree_linalg_ext.sort
 // CHECK: util.return
@@ -319,23 +311,14 @@ util.func public @shape_only_sort(%keys: tensor<4xi64>, %indices: tensor<4xi64>)
 }
 
 // -----
-
-// A shape-only key use must not depend on canonicalization before conversion.
+// Shape queries must not break the workspace tie.
 // CHECK-LABEL: util.func public @sort_key_shape_use
+// CHECK: linalg.copy
+// CHECK-NOT: linalg.copy
 // CHECK: %[[DISPATCH:.+]]:3 = flow.dispatch.workgroups
-// CHECK: %[[KEY_BINDING:[a-zA-Z0-9_]+]]: !iree_tensor_ext.dispatch.tensor<readonly:tensor<?xi64>>
-// CHECK-SAME: %[[INDEX_BINDING:[a-zA-Z0-9_]+]]: !iree_tensor_ext.dispatch.tensor<readwrite:tensor<?xi64>>
-// CHECK-SAME: %[[FILL_BINDING:[a-zA-Z0-9_]+]]: !iree_tensor_ext.dispatch.tensor<writeonly:tensor<?xi64>>
-// CHECK-SAME: %[[WORKSPACE:[a-zA-Z0-9_]+]]: !iree_tensor_ext.dispatch.tensor<readwrite:tensor<?xi64>>
-// CHECK-DAG: %[[KEYS:.+]] = iree_tensor_ext.dispatch.tensor.load %[[KEY_BINDING]]
-// CHECK-DAG: %[[INDICES:.+]] = iree_tensor_ext.dispatch.tensor.load %[[INDEX_BINDING]]
-// CHECK: %[[DEST:.+]] = iree_tensor_ext.dispatch.tensor.load %[[WORKSPACE]]
-// CHECK: %[[COPY:.+]] = linalg.copy ins(%[[KEYS]] : tensor<?xi64>) outs(%[[DEST]] : tensor<?xi64>)
-// CHECK: %[[SORT:.+]]:2 = iree_linalg_ext.sort dimension(0) outs(%[[COPY]], %[[INDICES]]
-// CHECK: %[[FILL:.+]] = linalg.fill
-// CHECK: iree_tensor_ext.dispatch.tensor.store %[[SORT]]#1, %[[INDEX_BINDING]]
-// CHECK: iree_tensor_ext.dispatch.tensor.store %[[FILL]], %[[FILL_BINDING]]
-// CHECK: iree_tensor_ext.dispatch.tensor.store %[[SORT]]#0, %[[WORKSPACE]]
+// CHECK: iree_linalg_ext.sort dimension(0)
+// CHECK: linalg.fill
+// CHECK-COUNT-3: iree_tensor_ext.dispatch.tensor.store
 // CHECK: util.return %[[DISPATCH]]#0, %[[DISPATCH]]#1
 util.func public @sort_key_shape_use(%keys: tensor<?xi64>, %indices: tensor<?xi64>)
     -> (tensor<?xi64>, tensor<?xi64>) {
@@ -360,28 +343,15 @@ util.func public @sort_key_shape_use(%keys: tensor<?xi64>, %indices: tensor<?xi6
 }
 
 // -----
-
-// Equal sources do not identify the working states of distinct Sort operations.
+// The second Sort must start from the original tensor version.
 // CHECK-LABEL: util.func public @two_sorts_shared_source
+// CHECK: linalg.copy
+// CHECK: linalg.copy
+// CHECK-NOT: linalg.copy
 // CHECK: %[[DISPATCH:.+]]:4 = flow.dispatch.workgroups
-// CHECK: %[[KEY_BINDING:[a-zA-Z0-9_]+]]: !iree_tensor_ext.dispatch.tensor<readonly:tensor<?xi64>>
-// CHECK-SAME: %[[INDEX0_BINDING:[a-zA-Z0-9_]+]]: !iree_tensor_ext.dispatch.tensor<readwrite:tensor<?xi64>>
-// CHECK-SAME: %[[INDEX1_BINDING:[a-zA-Z0-9_]+]]: !iree_tensor_ext.dispatch.tensor<readwrite:tensor<?xi64>>
-// CHECK-SAME: %[[WORKSPACE0:[a-zA-Z0-9_]+]]: !iree_tensor_ext.dispatch.tensor<readwrite:tensor<?xi64>>
-// CHECK-SAME: %[[WORKSPACE1:[a-zA-Z0-9_]+]]: !iree_tensor_ext.dispatch.tensor<readwrite:tensor<?xi64>>
-// CHECK-DAG: %[[KEYS:.+]] = iree_tensor_ext.dispatch.tensor.load %[[KEY_BINDING]]
-// CHECK-DAG: %[[INDICES0:.+]] = iree_tensor_ext.dispatch.tensor.load %[[INDEX0_BINDING]]
-// CHECK-DAG: %[[INDICES1:.+]] = iree_tensor_ext.dispatch.tensor.load %[[INDEX1_BINDING]]
-// CHECK: %[[DEST0:.+]] = iree_tensor_ext.dispatch.tensor.load %[[WORKSPACE0]]
-// CHECK: %[[COPY0:.+]] = linalg.copy ins(%[[KEYS]] : tensor<?xi64>) outs(%[[DEST0]] : tensor<?xi64>)
-// CHECK: %[[SORT0:.+]]:2 = iree_linalg_ext.sort dimension(0) outs(%[[COPY0]], %[[INDICES0]]
-// CHECK: %[[DEST1:.+]] = iree_tensor_ext.dispatch.tensor.load %[[WORKSPACE1]]
-// CHECK: %[[COPY1:.+]] = linalg.copy ins(%[[KEYS]] : tensor<?xi64>) outs(%[[DEST1]] : tensor<?xi64>)
-// CHECK: %[[SORT1:.+]]:2 = iree_linalg_ext.sort dimension(0) outs(%[[COPY1]], %[[INDICES1]]
-// CHECK: iree_tensor_ext.dispatch.tensor.store %[[SORT0]]#1, %[[INDEX0_BINDING]]
-// CHECK: iree_tensor_ext.dispatch.tensor.store %[[SORT1]]#1, %[[INDEX1_BINDING]]
-// CHECK: iree_tensor_ext.dispatch.tensor.store %[[SORT0]]#0, %[[WORKSPACE0]]
-// CHECK: iree_tensor_ext.dispatch.tensor.store %[[SORT1]]#0, %[[WORKSPACE1]]
+// CHECK: iree_linalg_ext.sort dimension(0)
+// CHECK: iree_linalg_ext.sort dimension(0)
+// CHECK-COUNT-4: iree_tensor_ext.dispatch.tensor.store
 // CHECK: util.return %[[DISPATCH]]#0, %[[DISPATCH]]#1
 util.func public @two_sorts_shared_source(
     %keys: tensor<?xi64>, %indices0: tensor<?xi64>, %indices1: tensor<?xi64>)
@@ -407,11 +377,9 @@ util.func public @two_sorts_shared_source(
 }
 
 // -----
-
-// A dead use chain must not create a workspace that keeps Sort alive. Required
-// evaluation in the same dispatch must survive removal of the pure computation.
 util.func private @observe()
 
+// Removing pure dead computation must preserve required evaluation.
 // CHECK-LABEL: util.func public @sort_dead_internal_chain
 // CHECK-NOT: iree_linalg_ext.sort
 // CHECK-NOT: linalg.copy
@@ -419,8 +387,6 @@ util.func private @observe()
 // CHECK-NOT: iree_linalg_ext.sort
 // CHECK-NOT: linalg.copy
 // CHECK: util.call @observe()
-// CHECK-NOT: iree_linalg_ext.sort
-// CHECK-NOT: linalg.copy
 // CHECK: util.return %[[RESULT]]
 util.func public @sort_dead_internal_chain(
     %keys: tensor<?xi64>, %indices: tensor<?xi64>, %other: tensor<4xi64>)
@@ -444,21 +410,14 @@ util.func public @sort_dead_internal_chain(
 }
 
 // -----
-
-// Dead comparator users must not introduce a workspace for an unused lane.
+// Dead comparator uses must not keep an unused lane alive.
 // CHECK-LABEL: util.func public @sort_dead_comparator_user
+// CHECK: linalg.copy
+// CHECK-NOT: linalg.copy
 // CHECK: %[[DISPATCH:.+]]:2 = flow.dispatch.workgroups
-// CHECK: %[[KEY_BINDING:[a-zA-Z0-9_]+]]: !iree_tensor_ext.dispatch.tensor<readonly:tensor<?xi64>>
-// CHECK-SAME: %[[INDEX_BINDING:[a-zA-Z0-9_]+]]: !iree_tensor_ext.dispatch.tensor<readwrite:tensor<?xi64>>
-// CHECK-SAME: %[[WORKSPACE:[a-zA-Z0-9_]+]]: !iree_tensor_ext.dispatch.tensor<readwrite:tensor<?xi64>>
-// CHECK-DAG: %[[KEYS:.+]] = iree_tensor_ext.dispatch.tensor.load %[[KEY_BINDING]]
-// CHECK-DAG: %[[INDICES:.+]] = iree_tensor_ext.dispatch.tensor.load %[[INDEX_BINDING]]
-// CHECK: %[[DEST:.+]] = iree_tensor_ext.dispatch.tensor.load %[[WORKSPACE]]
-// CHECK: %[[COPY:.+]] = linalg.copy ins(%[[KEYS]] : tensor<?xi64>) outs(%[[DEST]] : tensor<?xi64>)
-// CHECK: %[[SORT:.+]]:2 = iree_linalg_ext.sort dimension(0) outs(%[[COPY]], %[[INDICES]]
+// CHECK: iree_linalg_ext.sort dimension(0)
 // CHECK-NOT: arith.addi
-// CHECK: iree_tensor_ext.dispatch.tensor.store %[[SORT]]#1, %[[INDEX_BINDING]]
-// CHECK: iree_tensor_ext.dispatch.tensor.store %[[SORT]]#0, %[[WORKSPACE]]
+// CHECK-COUNT-2: iree_tensor_ext.dispatch.tensor.store
 // CHECK: util.return %[[DISPATCH]]#0
 util.func public @sort_dead_comparator_user(
     %keys: tensor<?xi64>, %extra: tensor<?xi64>, %indices: tensor<?xi64>)

@@ -5,6 +5,7 @@
 # SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
 """Build actual C++ controls, distinguish phases, and restore exact final source."""
+
 import atexit
 import hashlib
 import json
@@ -163,6 +164,7 @@ try:
                 "argsort_internal_key_use",
                 "argsort_local_keys",
                 "two_sorts_original_version",
+                "sort_preserve_intermediate_version",
             )
         ],
         "compiler/src/iree/compiler/DispatchCreation/test/convert_region_to_workgroups.mlir",
@@ -359,6 +361,129 @@ try:
     report["runs"][-1][
         "outcome"
     ] = "expected independent-oracle rejection of input corruption"
+
+    # Rebuild the reviewed head that lacks both repaired workspace paths.
+    restore()
+    old_head = "aa08621ce694db3ec54197ad29ec84232f44cce7"
+    for name in final_files:
+        (source / name).write_bytes(
+            subprocess.check_output(
+                ["git", "-C", str(source), "show", old_head + ":" + name]
+            )
+        )
+    command(
+        "old-paths-build",
+        ["ninja", "-C", build, "-j2", "iree-compile", "iree-opt"],
+        "build",
+    )
+    chains = source / "tests/e2e/regression/two_sorts_original_version.mlir"
+    result = command(
+        "old-paths-chain-compile",
+        [
+            compiler,
+            chains,
+            *flags,
+            "--mlir-print-ir-after=iree-codegen-iree-comprehensive-bufferize",
+            "-o",
+            out / "old-chain.vmfb",
+        ],
+        "compile",
+        status=1,
+    )
+    require(
+        "'memref.alloca' op expected no unbounded stack allocations" in result.stderr,
+        "old workspace path failed for an unrelated reason",
+    )
+    report["runs"][-1][
+        "outcome"
+    ] = "expected dependent-chain allocation failure; build succeeded"
+
+    partial = out / "old-buffer-partial-source.mlir"
+    partial.write_text(
+        """func.func @memref_sort(%input: tensor<4xi32>) -> tensor<4xi32> {
+  %result = flow.dispatch.region -> (tensor<4xi32>) {
+    %empty = tensor.empty() : tensor<4xi32>
+    %copy = linalg.copy ins(%input : tensor<4xi32>) outs(%empty : tensor<4xi32>) -> tensor<4xi32>
+    %buffer = bufferization.to_buffer %copy : tensor<4xi32> to memref<4xi32>
+    iree_linalg_ext.sort dimension(0) outs(%buffer : memref<4xi32>) {
+    ^bb0(%lhs: i32, %rhs: i32):
+      %cmp = arith.cmpi sle, %lhs, %rhs : i32
+      iree_linalg_ext.yield %cmp : i1
+    }
+    %tensor = bufferization.to_tensor %buffer restrict writable : memref<4xi32> to tensor<4xi32>
+    flow.return %tensor : tensor<4xi32>
+  }
+  return %result : tensor<4xi32>
+}
+module attributes { transform.with_named_sequence } {
+  transform.named_sequence @__transform_main(%module_op: !transform.any_op {transform.readonly}) {
+    %sort = transform.structured.match ops{["iree_linalg_ext.sort"]} in %module_op : (!transform.any_op) -> !transform.any_op
+    %tiled, %loop = transform.structured.tile_using_for %sort tile_sizes [2] : (!transform.any_op) -> (!transform.any_op, !transform.any_op)
+    transform.yield
+  }
+}
+"""
+    )
+    transformed = out / "old-buffer-partial.mlir"
+    command(
+        "old-paths-buffer-transform",
+        [
+            build / "tools/iree-opt",
+            partial,
+            "--iree-transform-dialect-interpreter",
+            "--iree-transform-dialect-drop-schedule",
+            "--canonicalize",
+            "-o",
+            transformed,
+        ],
+        "compiler test",
+    )
+    command(
+        "old-paths-buffer-compile",
+        [compiler, transformed, *flags, "-o", out / "old-buffer.vmfb"],
+        "compile",
+    )
+    output = out / "old-buffer-output.npy"
+    output.unlink(missing_ok=True)
+    command(
+        "old-paths-buffer-runtime",
+        [
+            runtime,
+            "--module=" + str(out / "old-buffer.vmfb"),
+            "--device=local-sync",
+            "--function=memref_sort",
+            "--input=4xi32=[4 3 2 1]",
+            "--output=@" + str(output),
+        ],
+        "runtime",
+    )
+    actual = np.load(output, allow_pickle=False)
+    require(
+        actual.dtype == np.int32
+        and actual.shape == (4,)
+        and np.array_equal(actual, np.array([3, 4, 1, 2], dtype=np.int32)),
+        "old buffer tile control failed for an unexpected reason",
+    )
+    oracle = (
+        "import numpy as np,sys; actual=np.load(sys.argv[1],allow_pickle=False); "
+        "expected=np.array(sorted([4,3,2,1]),dtype=np.int32); "
+        "ok=actual.dtype==expected.dtype and actual.shape==expected.shape and np.array_equal(actual,expected); "
+        'print("correct sort" if ok else "incorrect buffer sort: " + repr(actual.tolist())); '
+        "sys.exit(0 if ok else 1)"
+    )
+    result = command(
+        "old-paths-buffer-oracle",
+        [sys.executable, "-c", oracle, output],
+        "oracle",
+        status=1,
+    )
+    require(
+        "incorrect buffer sort: [3, 4, 1, 2]" in result.stdout,
+        "old buffer oracle failed for an unrelated reason",
+    )
+    report["runs"][-1][
+        "outcome"
+    ] = "expected independent-oracle rejection of partial buffer sort"
     report["controls"] = "pass"
 finally:
     restore()
@@ -402,7 +527,7 @@ print(
     json.dumps(
         {
             "verdict": "pass",
-            "controls": 4,
+            "controls": 6,
             "source_restored": True,
             "head": identity["head"],
         }

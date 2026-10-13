@@ -354,7 +354,12 @@ internal = compile_fixture(
 )
 for i, values in enumerate(cases):
     total = np.array(
-        sum(int(value) for value in values) % (2**64), dtype=np.uint64
+        sum(
+            (position + 1) * value
+            for position, value in enumerate(sorted(int(value) for value in values))
+        )
+        % (2**64),
+        dtype=np.uint64,
     ).view(np.int64)
     execute(
         f"internal-reduction-{i}",

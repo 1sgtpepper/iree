@@ -4,6 +4,12 @@
 # See https://llvm.org/LICENSE.txt for license information.
 # SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
+# Copyright 2026 The IREE Authors
+#
+# Licensed under the Apache License v2.0 with LLVM Exceptions.
+# See https://llvm.org/LICENSE.txt for license information.
+# SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
+
 """Challenge the actual aggregator using the just-completed executable reports."""
 import json
 from pathlib import Path
@@ -18,6 +24,8 @@ names = (
     "source-controls",
     "restored-exact-source",
     "correctness-recheck/additional",
+    "sort-workspace-paths",
+    "restored-sort-workspace-paths",
 )
 reports = {
     name: json.loads((root / "evidence" / name / "results.json").read_text())
@@ -116,5 +124,23 @@ exercise(
     "correctness-recheck/additional",
     lambda report: report["commands"][0].update(status=1),
     "Required additional commands are incomplete or failed",
+)
+exercise(
+    "missing-workspace-command",
+    "sort-workspace-paths",
+    lambda report: report["commands"].pop(),
+    "sort-workspace-paths: required workspace phases are incomplete",
+)
+exercise(
+    "failed-workspace-oracle",
+    "sort-workspace-paths",
+    lambda report: report["cases"][0].update(verdict="fail"),
+    "sort-workspace-paths: required workspace command or oracle failed",
+)
+exercise(
+    "missing-restored-workspace-case",
+    "restored-sort-workspace-paths",
+    lambda report: report["cases"].pop(),
+    "restored-sort-workspace-paths: required workspace phases are incomplete",
 )
 print(json.dumps({"verdict": "pass", "checks": results}, indent=2))

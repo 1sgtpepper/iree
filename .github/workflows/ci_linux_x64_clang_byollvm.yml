@@ -13,7 +13,7 @@ permissions:
   contents: read
 
 env:
-  SOURCE_SHA: 59201b95789d75836fbabc36eccc6b8b5abdddfa
+  SOURCE_SHA: 4fc318a9a5cb55c95f3d943de81afeb98583df1e
   CCACHE_DIR: ${{ github.workspace }}/compiler-cache
   CCACHE_BASEDIR: ${{ github.workspace }}
   CCACHE_MAXSIZE: 3G
@@ -46,8 +46,9 @@ jobs:
           cp -a ci-support/.github/sort-workspace-validation suite
           mkdir -p suite/evidence
           test "$(git -C source rev-parse HEAD)" = "${SOURCE_SHA}"
-          test "$(git -C source rev-parse HEAD^{tree})" = "35d5e0a39cf903cbf642f2bb29ceba9584285ffe"
+          test "$(git -C source rev-parse HEAD^{tree})" = "510529d3a740447c58ae596d0e659f234093e1c0"
           git -C source cat-file -e 6ec253ad4e259ad256c8a226f7a7a330debf937c^{commit}
+          git -C source fetch --no-tags --depth=1 origin b566531c8fcdfef29bc72c497a8305e7914159fe
           git -C source cat-file -e b566531c8fcdfef29bc72c497a8305e7914159fe^{commit}
 
       - name: Initialize required pinned submodules

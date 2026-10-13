@@ -32,12 +32,16 @@ cmake -S "${source_root}" -B build -G Ninja \
   -DIREE_HAL_DRIVER_DEFAULTS=OFF -DIREE_HAL_DRIVER_LOCAL_SYNC=ON -DIREE_HAL_DRIVER_LOCAL_TASK=ON \
   -DIREE_ENABLE_CPUINFO=OFF -DIREE_ERROR_ON_MISSING_SUBMODULES=OFF \
   -DIREE_DEFAULT_CPU_LLVM_TARGETS=X86 -DLLVM_TARGETS_TO_BUILD=X86 -DLLVM_ENABLE_ASSERTIONS=ON \
-  -DLLVM_PARALLEL_LINK_JOBS=1 2>&1 | tee evidence/reproducible-configure.log
-ninja -C build -j2 iree-compile iree-opt iree-run-module iree-run-mlir FileCheck 2>&1 | tee evidence/reproducible-build.log
+  -DLLVM_PARALLEL_LINK_JOBS=1 > evidence/reproducible-configure.log 2>&1
+ninja -C build -j2 iree-compile iree-opt iree-run-module iree-run-mlir FileCheck > evidence/reproducible-build.log 2>&1
 .venv/bin/python validation/validate_exact_source.py
 .venv/bin/python validation/check_additional_sort_cases.py
+.venv/bin/python validation/validate_sort_workspace_paths.py --source "${source_root}"
 .venv/bin/python validation/validate_source_controls.py
 .venv/bin/python validation/validate_exact_source.py --out evidence/restored-exact-source
 .venv/bin/python validation/check_additional_sort_cases.py
+.venv/bin/python validation/validate_sort_workspace_paths.py --source "${source_root}" \
+  --out evidence/restored-sort-workspace-paths \
+  --positive-report evidence/restored-exact-source/results.json
 .venv/bin/python validation/summarize_results.py
 .venv/bin/python validation/test_aggregate_controls.py > evidence/aggregate-command-test.log

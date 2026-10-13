@@ -1,15 +1,17 @@
 # Sort workspace CPU validation
 
 This fork-only suite builds and tests source revision
-`59201b95789d75836fbabc36eccc6b8b5abdddfa`, with its pinned LLVM submodule.
+`4fc318a9a5cb55c95f3d943de81afeb98583df1e`, with its pinned LLVM submodule.
 The workflow checks out that source separately from the validation branch so
 workflow changes cannot silently change the compiler revision under test.
 
 The required checks include independent ordering and input-preservation oracles,
-allocation checks, compiler fixtures, literal runtime RUN lines, and four rebuilt
+allocation checks, compiler fixtures, literal runtime RUN lines, and six rebuilt
 source controls. Build failures, missing checks, unrelated diagnostics, stale
-reports, and escaped controls fail the run. The final source is restored and the
-positive suites run again after the controls.
+reports, and escaped controls fail the run. The new workspace suite requires 40 independent runtime cases across local-sync
+and local-task, strict dynamic allocation checks, a bounded preservation-copy
+check and the intended buffer-tiling rejection. The final source is restored and
+all positive suites run again after the controls.
 Aggregate admission also requires complete primary phases and every successful
 control build; executable report mutations verify that incomplete or failed
 reports cannot become a full validation success.

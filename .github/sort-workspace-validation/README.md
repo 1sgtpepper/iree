@@ -6,10 +6,11 @@ The workflow checks out that source separately from the validation branch so
 workflow changes cannot silently change the compiler revision under test.
 
 The required checks include independent ordering and input-preservation oracles,
-allocation checks, compiler fixtures, literal runtime RUN lines, and six rebuilt
+allocation checks, compiler fixtures, literal runtime RUN lines, and seven rebuilt
 source controls. Build failures, missing checks, unrelated diagnostics, stale
-reports, and escaped controls fail the run. The new workspace suite requires 40 independent runtime cases across local-sync
-and local-task, strict dynamic allocation checks, a bounded preservation-copy
+reports, and escaped controls fail the run. The workspace suite requires 40
+independent runtime cases across local-sync and local-task, strict dynamic
+allocation checks, a bounded preservation-copy
 check and the intended buffer-tiling rejection. The final source is restored and
 all positive suites run again after the controls.
 Aggregate admission also requires complete primary phases and every successful

@@ -484,6 +484,46 @@ module attributes { transform.with_named_sequence } {
     report["runs"][-1][
         "outcome"
     ] = "expected independent-oracle rejection of partial buffer sort"
+    # Rebuild the first repair: destination updates work, but local empty
+    # producer destinations still lack managed storage.
+    restore()
+    cpp.write_bytes(
+        subprocess.check_output(
+            [
+                "git",
+                "-C",
+                str(source),
+                "show",
+                "4fc318a9a5cb55c95f3d943de81afeb98583df1e:" + relative,
+            ]
+        )
+    )
+    command(
+        "local-initializer-build",
+        ["ninja", "-C", build, "-j2", "iree-compile"],
+        "build",
+    )
+    result = command(
+        "local-initializer-compile",
+        [
+            compiler,
+            chains,
+            *flags,
+            "--mlir-print-ir-after=iree-codegen-iree-comprehensive-bufferize",
+            "-o",
+            out / "local-initializer.vmfb",
+        ],
+        "compile",
+        status=1,
+    )
+    require(
+        "exceeded stack allocation limit" in result.stderr
+        and "two_sorts_local_update" in result.stderr,
+        "old local initializer failed for an unrelated reason",
+    )
+    report["runs"][-1][
+        "outcome"
+    ] = "expected local-initializer allocation failure; build succeeded"
     report["controls"] = "pass"
 finally:
     restore()
@@ -527,7 +567,7 @@ print(
     json.dumps(
         {
             "verdict": "pass",
-            "controls": 6,
+            "controls": 7,
             "source_restored": True,
             "head": identity["head"],
         }

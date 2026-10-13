@@ -62,6 +62,7 @@ expected_controls = {
     "borrowed-preservation-oracle",
     "old-paths-chain-compile",
     "old-paths-buffer-oracle",
+    "local-initializer-compile",
 }
 if {
     row["name"] for row in reports["source-controls"]["runs"] if "outcome" in row
@@ -88,11 +89,13 @@ required_control_commands = {
     "old-paths-buffer-compile",
     "old-paths-buffer-runtime",
     "old-paths-buffer-oracle",
+    "local-initializer-build",
+    "local-initializer-compile",
     "restore-build",
 }
 control_runs = reports["source-controls"]["runs"]
 if (
-    len(control_runs) != 21
+    len(control_runs) != 23
     or {row["name"] for row in control_runs} != required_control_commands
 ):
     raise SystemExit("Required control build/compile/runtime phases are incomplete")
@@ -141,9 +144,20 @@ for name in ("sort-workspace-paths", "restored-sort-workspace-paths"):
     ):
         raise SystemExit(name + ": required workspace phases are incomplete")
     if any(
-        row["exit_status"] != (1 if row["name"] == "buffer-partial-rejection" else 0)
+        row["exit_status"]
+        != (
+            1
+            if row["name"]
+            in {"buffer-partial-rejection", "unsupported-local-projection"}
+            else 0
+        )
         or row["expected_status"]
-        != (1 if row["name"] == "buffer-partial-rejection" else 0)
+        != (
+            1
+            if row["name"]
+            in {"buffer-partial-rejection", "unsupported-local-projection"}
+            else 0
+        )
         for row in report["commands"]
     ) or any(row["verdict"] != "pass" for row in report["cases"]):
         raise SystemExit(name + ": required workspace command or oracle failed")

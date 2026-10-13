@@ -13,10 +13,11 @@ permissions:
   contents: read
 
 env:
-  SOURCE_SHA: 4fc318a9a5cb55c95f3d943de81afeb98583df1e
+  SOURCE_SHA: dfc43d927a032f46524252ee57f49b54b18740f3
   CCACHE_DIR: ${{ github.workspace }}/compiler-cache
   CCACHE_BASEDIR: ${{ github.workspace }}
   CCACHE_MAXSIZE: 3G
+  CCACHE_SLOPPINESS: pch_defines,time_macros
 
 jobs:
   cpu:
@@ -46,7 +47,7 @@ jobs:
           cp -a ci-support/.github/sort-workspace-validation suite
           mkdir -p suite/evidence
           test "$(git -C source rev-parse HEAD)" = "${SOURCE_SHA}"
-          test "$(git -C source rev-parse HEAD^{tree})" = "510529d3a740447c58ae596d0e659f234093e1c0"
+          test "$(git -C source rev-parse HEAD^{tree})" = "9e1449d9bf226a0aee38bfde784d4f98eb1df997"
           git -C source cat-file -e 6ec253ad4e259ad256c8a226f7a7a330debf937c^{commit}
           git -C source fetch --no-tags --depth=1 origin b566531c8fcdfef29bc72c497a8305e7914159fe
           git -C source cat-file -e b566531c8fcdfef29bc72c497a8305e7914159fe^{commit}
@@ -90,6 +91,10 @@ jobs:
       - name: Build exact source and run every required check
         run: |
           bash suite/validation/validate.sh 2>&1 | tee suite/evidence/final-validation.log
+
+      - name: Record compiler cache results
+        if: always()
+        run: ccache --show-stats > suite/evidence/compiler-cache-stats.log
 
       - name: Save compiler cache
         if: always() && steps.cache.outputs.cache-hit != 'true'

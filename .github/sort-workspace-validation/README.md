@@ -1,7 +1,7 @@
 # Sort workspace CPU validation
 
 This fork-only suite builds and tests source revision
-`4fc318a9a5cb55c95f3d943de81afeb98583df1e`, with its pinned LLVM submodule.
+`dfc43d927a032f46524252ee57f49b54b18740f3`, with its pinned LLVM submodule.
 The workflow checks out that source separately from the validation branch so
 workflow changes cannot silently change the compiler revision under test.
 
@@ -36,3 +36,8 @@ with these requirements. With Clang, CMake, Ninja and ccache installed, run:
 mkdir -p suite/evidence
 bash suite/validation/validate.sh
 ```
+
+The original failing local-update case remains a required positive. A seventh
+rebuilt control restores the first repair and must reproduce its specific
+local-initializer stack-limit failure. The final source initializes local empty
+producer destinations in managed storage within the original dispatch.

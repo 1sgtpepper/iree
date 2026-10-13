@@ -144,20 +144,9 @@ for name in ("sort-workspace-paths", "restored-sort-workspace-paths"):
     ):
         raise SystemExit(name + ": required workspace phases are incomplete")
     if any(
-        row["exit_status"]
-        != (
-            1
-            if row["name"]
-            in {"buffer-partial-rejection", "unsupported-local-projection"}
-            else 0
-        )
+        row["exit_status"] != (1 if row["name"] == "buffer-partial-rejection" else 0)
         or row["expected_status"]
-        != (
-            1
-            if row["name"]
-            in {"buffer-partial-rejection", "unsupported-local-projection"}
-            else 0
-        )
+        != (1 if row["name"] == "buffer-partial-rejection" else 0)
         for row in report["commands"]
     ) or any(row["verdict"] != "pass" for row in report["cases"]):
         raise SystemExit(name + ": required workspace command or oracle failed")

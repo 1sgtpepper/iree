@@ -54,6 +54,23 @@ jobs:
           .iree-clang-tidy/clang-tidy --version | tee tidy-evidence/tool-version.log
           git rev-parse HEAD HEAD^{tree} > tidy-evidence/source-identity.log
 
+      - name: Verify analysis rejects an incorrect result
+        run: |
+          echo 'int validName() { return 0; }' > tidy-evidence/valid.cpp
+          echo 'int InvalidName() { return 0; }' > tidy-evidence/invalid.cpp
+          .iree-clang-tidy/clang-tidy --config-file=compiler/.clang-tidy \
+            --warnings-as-errors='*' tidy-evidence/valid.cpp -- -std=c++17 \
+            2>&1 | tee tidy-evidence/valid-control.log
+          set +e
+          .iree-clang-tidy/clang-tidy --config-file=compiler/.clang-tidy \
+            --warnings-as-errors='*' tidy-evidence/invalid.cpp -- -std=c++17 \
+            2>&1 | tee tidy-evidence/invalid-control.log
+          tidy_status=${PIPESTATUS[0]}
+          set -e
+          test "${tidy_status}" -eq 1
+          grep -F "invalid case style for function 'InvalidName'" tidy-evidence/invalid-control.log
+          grep -F 'readability-identifier-naming,-warnings-as-errors' tidy-evidence/invalid-control.log
+
       - name: Restore local compiler cache
         uses: hendrikmuhs/ccache-action@d62db5f07c26379fc4b4e0916f098a92573c3b03 # v1.2.23
         with:

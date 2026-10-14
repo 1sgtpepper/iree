@@ -7,14 +7,16 @@
 name: PkgCI Build Packages
 on:
   workflow_call:
+  workflow_dispatch:
 
 jobs:
   linux_x86_64_release_packages:
     name: Linux Release (x86_64)
-    runs-on: azure-linux-scale
+    runs-on: ${{ github.repository_owner == 'iree-org' && 'azure-linux-scale' || 'ubuntu-24.04' }}
     strategy:
       fail-fast: false
     env:
+      CMAKE_BUILD_PARALLEL_LEVEL: 2
       CACHE_DIR: ${{ github.workspace }}/.iree-container-cache
       MANYLINUX_DOCKER_IMAGE: ghcr.io/iree-org/manylinux_x86_64@sha256:2e0246137819cf10ed84240a971f9dd75cc3eb62dc6907dfd2080ee966b3c9f4
       PACKAGE_SUFFIX: ""

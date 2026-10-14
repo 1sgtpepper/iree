@@ -12,13 +12,18 @@ on:
 
 jobs:
   linux_x64_clang:
-    runs-on: azure-linux-scale
+    runs-on: ${{ github.repository_owner == 'iree-org' && 'azure-linux-scale' || 'ubuntu-24.04' }}
     container:
       image: ghcr.io/iree-org/cpubuilder_ubuntu_jammy@sha256:78a558b999b230f7e1da376639e14b44f095f30f1777d6a272ba48c0bbdd4ccb
     defaults:
       run:
         shell: bash
     env:
+      CMAKE_BUILD_PARALLEL_LEVEL: 2
+      CTEST_PARALLEL_LEVEL: 2
+      IREE_READ_LOCAL_CCACHE: 1
+      IREE_WRITE_LOCAL_CCACHE: 1
+      CCACHE_SLOPPINESS: pch_defines,time_macros
       BUILD_DIR: build
       SCCACHE_AZURE_CONNECTION_STRING: "${{ secrets.AZURE_CCACHE_CONNECTION_STRING }}"
       SCCACHE_AZURE_BLOB_CONTAINER: ccache-container
@@ -29,6 +34,12 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           submodules: true
+      - name: Restore local compiler cache
+        uses: hendrikmuhs/ccache-action@d62db5f07c26379fc4b4e0916f098a92573c3b03 # v1.2.23
+        with:
+          key: ${{ github.job }}-llvm53e39b225bd1
+          max-size: 1G
+
       - name: Install Python requirements
         run: |
           python3 -m pip install -r ./runtime/bindings/python/iree/runtime/build_requirements.txt
@@ -39,7 +50,5 @@ jobs:
           ./build_tools/cmake/build_all.sh "${BUILD_DIR}"
       - name: Run CTest
         run: ./build_tools/cmake/ctest_all.sh "${BUILD_DIR}"
-        env:
-          CTEST_PARALLEL_LEVEL: 32
 
       # Alerting on failure is the responsibility of the calling job.

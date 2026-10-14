@@ -4,31 +4,18 @@
 # See https://llvm.org/LICENSE.txt for license information.
 # SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
-# This workflow uses the newest clang-tidy binary built from source after the
-# latest integrate. This way we get the newest checks (incl., llvm-specific
-# ones).
-
 name: Clang Tidy
 
 on:
-  pull_request:
-    paths:
-      - '**.h'
-      - '**.c'
-      - '**.cpp'
-      - '.clang-tidy'
-      - '.github/workflows/clang_tidy.yml'
+  workflow_dispatch:
 
 permissions:
-  contents: write
-  pull-requests: write
-
-concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number }}
-  cancel-in-progress: true
+  contents: read
+  actions: read
 
 jobs:
   clang-tidy:
+    if: github.repository == '1sgtpepper/iree'
     runs-on: ubuntu-24.04
     container:
       image: ghcr.io/iree-org/cpubuilder_ubuntu_jammy@sha256:78a558b999b230f7e1da376639e14b44f095f30f1777d6a272ba48c0bbdd4ccb
@@ -37,96 +24,66 @@ jobs:
         shell: bash
     env:
       BUILD_DIR: build
+      CMAKE_BUILD_PARALLEL_LEVEL: 2
+      IREE_READ_LOCAL_CCACHE: 1
+      IREE_WRITE_LOCAL_CCACHE: 1
     steps:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          submodules: false
+          submodules: true
           fetch-depth: 0
+          persist-credentials: false
 
-      - name: Initialize submodules
-        run: |
-          git config --global --add safe.directory "$GITHUB_WORKSPACE"
-          git submodule update --init --depth=1
-
-      - name: Download iree-clang-tidy artifact
+      - name: Download pinned clang-tidy
         uses: dawidd6/action-download-artifact@d63b86af1b34672e53c440b1b83979861906bad7 # v24
         with:
-          workflow: build_clang_tidy.yml
+          repo: iree-org/iree
+          run_id: 32944069152
           name: iree-clang-tidy-linux-x86_64
           path: .iree-clang-tidy
 
-      - name: Setup iree-clang-tidy
+      - name: Verify analysis tool and compiler source
         run: |
-          # Make executable (artifact download doesn't preserve permissions).
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          mkdir -p tidy-evidence
+          test "$(cat .iree-clang-tidy/llvm-project-revision.txt)" = "$(git -C third_party/llvm-project rev-parse HEAD)"
+          echo "97f912d92e251d09f7c7d721981991b909bdeab880a3378a3f8ee056b39bfc38  .iree-clang-tidy/clang-tidy" | sha256sum --check
+          git diff --exit-code dfc43d927a032f46524252ee57f49b54b18740f3 -- compiler/src tests/e2e/regression
           chmod +x .iree-clang-tidy/clang-tidy
-          echo "Using clang-tidy from llvm-project revision:"
-          cat .iree-clang-tidy/llvm-project-revision.txt
-          .iree-clang-tidy/clang-tidy --version
+          .iree-clang-tidy/clang-tidy --version | tee tidy-evidence/tool-version.log
+          git rev-parse HEAD HEAD^{tree} > tidy-evidence/source-identity.log
+
+      - name: Restore local compiler cache
+        uses: hendrikmuhs/ccache-action@d62db5f07c26379fc4b4e0916f098a92573c3b03 # v1.2.23
+        with:
+          key: linux_x64_clang-llvm53e39b225bd1
+          max-size: 1G
 
       - name: Install Python requirements
         run: |
-          # Use uv instead of plain pip since cpp-linter uses it anyway.
-          curl -LsSf https://astral.sh/uv/install.sh | sh
-          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
-          export PATH="$HOME/.local/bin:$PATH"
-          uv pip install --system -r ./runtime/bindings/python/iree/runtime/build_requirements.txt
-          uv pip install --system -r ./build_tools/github_actions/ci_requirements.txt
+          python3 -m pip install -r ./runtime/bindings/python/iree/runtime/build_requirements.txt
+          python3 -m pip install -r ./build_tools/github_actions/ci_requirements.txt
 
-      - name: Generate compilation database (compile_commands.json)
+      - name: Prepare compilation database and generated headers
         run: |
-          IREE_CONFIGURE_ONLY=1 ./build_tools/cmake/build_all.sh "${BUILD_DIR}"
+          IREE_CONFIGURE_ONLY=1 ./build_tools/cmake/build_all.sh "${BUILD_DIR}" 2>&1 | tee tidy-evidence/configure.log
+          ninja -C "${BUILD_DIR}" -j2 \
+            compiler/src/iree/compiler/Dialect/LinalgExt/IR/CMakeFiles/iree_compiler_Dialect_LinalgExt_IR_IR.objects.dir/TilingInterfaceImpl.cpp.o \
+            compiler/src/iree/compiler/DispatchCreation/CMakeFiles/iree_compiler_DispatchCreation_DispatchCreation.objects.dir/ConvertDispatchRegionsToWorkgroups.cpp.o \
+            2>&1 | tee tidy-evidence/build.log
 
-      - name: Select clang-tidy diff mode
-        id: tidy-diff-mode
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          PR_NUMBER: ${{ github.event.pull_request.number }}
+      - name: Analyze both changed translation units
         run: |
-          status_code=$(curl -sS -o /tmp/pr.diff -w "%{http_code}" \
-            -H "Authorization: Bearer ${GITHUB_TOKEN}" \
-            -H "Accept: application/vnd.github.v3.diff" \
-            "${GITHUB_API_URL}/repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}")
-          if [[ "${status_code}" == "200" ]]; then
-            echo "use_cpp_linter=true" >> "${GITHUB_OUTPUT}"
-          else
-            echo "GitHub PR diff request returned ${status_code}; running clang-tidy locally on changed files."
-            echo "use_cpp_linter=false" >> "${GITHUB_OUTPUT}"
-          fi
+          .iree-clang-tidy/clang-tidy -p "${BUILD_DIR}" --warnings-as-errors='*' \
+            compiler/src/iree/compiler/Dialect/LinalgExt/IR/TilingInterfaceImpl.cpp \
+            compiler/src/iree/compiler/DispatchCreation/ConvertDispatchRegionsToWorkgroups.cpp \
+            2>&1 | tee tidy-evidence/analysis.log
 
-      - name: Run clang-tidy
-        if: steps.tidy-diff-mode.outputs.use_cpp_linter == 'true'
-        uses: cpp-linter/cpp-linter-action@cab1143a2c149bc41e85b070a9de81716974c18f # v1.11.4
-        id: linter
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Preserve analysis evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          version: .iree-clang-tidy
-          style: ''  # Disable clang-format (already handled by pre-commit).
-          tidy-checks: ''  # Use .clang-tidy config files.
-          database: ${{ env.BUILD_DIR }}
-          files-changed-only: true
-          lines-changed-only: diff
-          ignore: 'third_party'
-          thread-comments: false
-          step-summary: true
-
-      - name: Skip clang-tidy on large diff
-        if: steps.tidy-diff-mode.outputs.use_cpp_linter == 'false'
-        env:
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-        run: |
-          changed_files="${RUNNER_TEMP}/clang-tidy-changed-files.txt"
-
-          git diff --name-only --diff-filter=ACMRT "${BASE_SHA}" "${HEAD_SHA}" \
-            | grep -E '\.(c|h|C|H|cpp|hpp|cc|hh|c\+\+|h\+\+|cxx|hxx)$' \
-            | grep -Ev '(^|/)third_party/' \
-            | sort -u > "${changed_files}" || true
-
-          if [[ ! -s "${changed_files}" ]]; then
-            echo "No changed C/C++ files found."
-            exit 0
-          fi
-
-          echo "::warning title=clang-tidy skipped::GitHub refused the PR diff because it exceeds the 20,000-line API limit, so cpp-linter cannot compute changed-line diagnostics for $(wc -l < "${changed_files}") changed C/C++ files."
+          name: sort-workspace-tidy-evidence
+          path: tidy-evidence
+          if-no-files-found: error

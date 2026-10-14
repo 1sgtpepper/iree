@@ -121,7 +121,13 @@ jobs:
       - name: CMake - build
         run: cmake --build ${BUILD_DIR} -- -k 0
       - name: CTest
-        run: bash ./build_tools/cmake/ctest_all.sh "${BUILD_DIR}"
+        run: |
+          if [[ "${{ matrix.name }}" == "ubuntu-24.04-arm" ]]; then
+            ulimit -l
+            sudo prlimit --pid $$ --memlock=unlimited:unlimited
+            ulimit -l
+          fi
+          bash ./build_tools/cmake/ctest_all.sh "${BUILD_DIR}"
 
   runtime_small:
     needs: setup

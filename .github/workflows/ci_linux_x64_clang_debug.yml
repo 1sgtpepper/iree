@@ -24,6 +24,11 @@ jobs:
       run:
         shell: bash
     env:
+      CMAKE_BUILD_PARALLEL_LEVEL: 4
+      CTEST_PARALLEL_LEVEL: 2
+      IREE_READ_LOCAL_CCACHE: 1
+      IREE_WRITE_LOCAL_CCACHE: 1
+      CCACHE_SLOPPINESS: pch_defines,time_macros
       BUILD_DIR: build-debug
       SCCACHE_AZURE_CONNECTION_STRING: "${{ secrets.AZURE_CCACHE_CONNECTION_STRING }}"
       SCCACHE_AZURE_BLOB_CONTAINER: ccache-container
@@ -34,6 +39,12 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           submodules: true
+      - name: Restore local compiler cache
+        uses: hendrikmuhs/ccache-action@d62db5f07c26379fc4b4e0916f098a92573c3b03 # v1.2.23
+        with:
+          key: ${{ github.job }}-llvm53e39b225bd1
+          max-size: 1G
+
       - name: Install Python requirements
         run: |
           python3 -m pip install -r ./runtime/bindings/python/iree/runtime/build_requirements.txt
@@ -41,6 +52,7 @@ jobs:
       - name: Build IREE
         env:
           CMAKE_BUILD_TYPE: Debug
+          IREE_BUILD_TEST_DEPS: 0
         run: |
           source ./build_tools/cmake/setup_sccache.sh
           ./build_tools/cmake/build_all.sh "${BUILD_DIR}"

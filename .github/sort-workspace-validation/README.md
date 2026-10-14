@@ -42,3 +42,19 @@ The original failing local-update case remains a required positive. A seventh
 rebuilt control restores the first repair and must reproduce its specific
 local-initializer stack-limit failure. The final source initializes local empty
 producer destinations in managed storage within the original dispatch.
+
+The validation branch also provides manual Clang Tidy analysis of both changed
+translation units, including generated headers, using the exact LLVM analysis
+tool from upstream run32944069152. Tool revision/hash mismatches, compiler
+diagnostics and enabled tidy warnings fail the job. Run it with:
+
+```bash
+gh workflow run clang_tidy.yml --repo 1sgtpepper/iree --ref validation/sort-workspace-cpu
+```
+
+Native compiler, sanitizer, Bazel and package workflows use hosted runners on
+the fork, bounded build parallelism and local build caches. Their original
+build/test scripts remain required. The debug job builds and installs the full
+project without the optional test dependencies, matching its documented
+build-only contract. The fork source branch and upstream PR are separate from
+these validation workflow changes.

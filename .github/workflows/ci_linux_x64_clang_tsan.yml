@@ -28,11 +28,23 @@ jobs:
     defaults:
       run:
         shell: bash
+    env:
+      CMAKE_BUILD_PARALLEL_LEVEL: 2
+      CTEST_PARALLEL_LEVEL: 2
+      IREE_READ_LOCAL_CCACHE: 1
+      IREE_WRITE_LOCAL_CCACHE: 1
+      CCACHE_SLOPPINESS: pch_defines,time_macros
     steps:
       - name: "Checking out repository"
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           submodules: true
+      - name: Restore local compiler cache
+        uses: hendrikmuhs/ccache-action@d62db5f07c26379fc4b4e0916f098a92573c3b03 # v1.2.23
+        with:
+          key: ${{ github.job }}-llvm53e39b225bd1
+          max-size: 1G
+
       - name: Install Python requirements
         run: |
           python3 -m pip install -r ./runtime/bindings/python/iree/runtime/build_requirements.txt
@@ -48,6 +60,9 @@ jobs:
           SCCACHE_AZURE_KEY_PREFIX: "ci_linux_x64_clang_tsan"
         run: |
           source build_tools/cmake/setup_sccache.sh
+          if (( IREE_USE_SCCACHE == 0 )); then
+            source build_tools/cmake/setup_ccache.sh
+          fi
           ./build_tools/cmake/build_and_test_tsan.sh
           sccache --show-stats
 

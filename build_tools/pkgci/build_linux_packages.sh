@@ -93,6 +93,7 @@ function run_on_host() {
     -v "${repo_root}:${repo_root}" \
     -v "${output_dir}:${output_dir}" \
     -e __MANYLINUX_BUILD_WHEELS_IN_DOCKER=1 \
+    -e CMAKE_BUILD_PARALLEL_LEVEL \
     -e "override_python_versions=${python_versions}" \
     -e "packages=${packages}" \
     -e "package_suffix=${package_suffix}" \

@@ -8,6 +8,7 @@ name: Validate Sort workspace ownership
 
 on:
   workflow_dispatch:
+  workflow_call:
 
 permissions:
   contents: read

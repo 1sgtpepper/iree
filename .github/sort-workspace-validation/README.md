@@ -58,3 +58,14 @@ build/test scripts remain required. The debug job builds and installs the full
 project without the optional test dependencies, matching its documented
 build-only contract. The fork source branch and upstream PR are separate from
 these validation workflow changes.
+
+The original ARM64 io_uring failure can be checked explicitly with:
+
+```bash
+gh workflow run ci_linux_arm64_clang.yml --repo 1sgtpepper/iree --ref validation/sort-workspace-cpu
+```
+
+On the fork this runs the existing runtime test on a hosted ARM64 CPU and
+requires its explicit success output. A missing or skipped GTest case fails.
+The original ARM64 compiler job retains its owner restriction and is reported
+as skipped on the fork; this probe does not claim an ARM64 compiler build.

@@ -14,7 +14,6 @@ jobs:
   windows_x64_msvc:
     runs-on: ${{ github.repository_owner == 'iree-org' && 'azure-windows-scale' || 'windows-2022' }}
     env:
-      BASE_BUILD_DIR_POWERSHELL: ${{ runner.temp }}\iree-build
       CMAKE_BUILD_PARALLEL_LEVEL: 2
       CTEST_PARALLEL_LEVEL: 2
       IREE_READ_LOCAL_CCACHE: 1
@@ -31,11 +30,12 @@ jobs:
       # TODO(#18813): Remove this. Environment setup needs to happen on runners, not in workflows.
       - name: "Create build dir"
         run: |
-          $buildDir = "$env:BASE_BUILD_DIR_POWERSHELL\"
+          $buildDir = "$env:RUNNER_TEMP\iree-build"
+          $env:BUILD_DIR_POWERSHELL = $buildDir
           echo "BUILD_DIR_POWERSHELL=$buildDir" >> $env:GITHUB_ENV
           mkdir "$buildDir"
           Write-Host "Generated Build Directory: $buildDir"
-          $bashBuildDir = bash -c 'cygpath -u "$BASE_BUILD_DIR_POWERSHELL"'
+          $bashBuildDir = bash -c 'cygpath -u "$BUILD_DIR_POWERSHELL"'
           echo  "BUILD_DIR_BASH=$bashBuildDir" >> $env:GITHUB_ENV
           Write-Host "Converted Build Directory For Bash: $bashBuildDir"
       - name: "Setting up Python"

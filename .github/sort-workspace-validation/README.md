@@ -44,9 +44,11 @@ local-initializer stack-limit failure. The final source initializes local empty
 producer destinations in managed storage within the original dispatch.
 
 The validation branch also provides manual Clang Tidy analysis of both changed
-translation units, including generated headers, using the exact LLVM analysis
-tool from upstream run32944069152. Tool revision/hash mismatches, compiler
-diagnostics and enabled tidy warnings fail the job. Run it with:
+translation units, including generated and builtin headers, using the exact LLVM analysis
+tool from upstream run32944069152. Tool revision/hash mismatches and compiler
+diagnostics fail the job. Enabled tidy warnings on changed lines fail under
+the repository's existing diff policy; deliberate lint and compiler violations
+exercise that gate. Run it with:
 
 ```bash
 gh workflow run clang_tidy.yml --repo 1sgtpepper/iree --ref validation/sort-workspace-cpu

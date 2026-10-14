@@ -24,6 +24,7 @@ jobs:
         shell: bash
     env:
       BUILD_DIR: build
+      TIDY_RESOURCE_DIR: ${{ github.workspace }}/build/llvm-project/lib/clang/24
       CMAKE_BUILD_PARALLEL_LEVEL: 2
       IREE_READ_LOCAL_CCACHE: 1
       IREE_WRITE_LOCAL_CCACHE: 1
@@ -54,23 +55,6 @@ jobs:
           .iree-clang-tidy/clang-tidy --version | tee tidy-evidence/tool-version.log
           git rev-parse HEAD HEAD^{tree} > tidy-evidence/source-identity.log
 
-      - name: Verify analysis rejects an incorrect result
-        run: |
-          echo 'int validName() { return 0; }' > tidy-evidence/valid.cpp
-          echo 'int InvalidName() { return 0; }' > tidy-evidence/invalid.cpp
-          .iree-clang-tidy/clang-tidy --config-file=compiler/.clang-tidy \
-            --warnings-as-errors='*' tidy-evidence/valid.cpp -- -std=c++17 \
-            2>&1 | tee tidy-evidence/valid-control.log
-          set +e
-          .iree-clang-tidy/clang-tidy --config-file=compiler/.clang-tidy \
-            --warnings-as-errors='*' tidy-evidence/invalid.cpp -- -std=c++17 \
-            2>&1 | tee tidy-evidence/invalid-control.log
-          tidy_status=${PIPESTATUS[0]}
-          set -e
-          test "${tidy_status}" -eq 1
-          grep -F "invalid case style for function 'InvalidName'" tidy-evidence/invalid-control.log
-          grep -F 'readability-identifier-naming,-warnings-as-errors' tidy-evidence/invalid-control.log
-
       - name: Restore local compiler cache
         uses: hendrikmuhs/ccache-action@d62db5f07c26379fc4b4e0916f098a92573c3b03 # v1.2.23
         with:
@@ -85,14 +69,76 @@ jobs:
       - name: Prepare compilation database and generated headers
         run: |
           IREE_CONFIGURE_ONLY=1 ./build_tools/cmake/build_all.sh "${BUILD_DIR}" 2>&1 | tee tidy-evidence/configure.log
-          ninja -C "${BUILD_DIR}" -j2 \
+          ninja -C "${BUILD_DIR}" -j2 clang-resource-headers \
             compiler/src/iree/compiler/Dialect/LinalgExt/IR/CMakeFiles/iree_compiler_Dialect_LinalgExt_IR_IR.objects.dir/TilingInterfaceImpl.cpp.o \
             compiler/src/iree/compiler/DispatchCreation/CMakeFiles/iree_compiler_DispatchCreation_DispatchCreation.objects.dir/ConvertDispatchRegionsToWorkgroups.cpp.o \
             2>&1 | tee tidy-evidence/build.log
 
+      - name: Verify analysis rejects an incorrect result
+        run: |
+          test -f "${TIDY_RESOURCE_DIR}/include/stddef.h"
+          printf '#include <stddef.h>\nint validName() { return 0; }\n' > tidy-evidence/valid.cpp
+          printf '#include <stddef.h>\nint InvalidName() { return 0; }\n' > tidy-evidence/invalid.cpp
+          .iree-clang-tidy/clang-tidy --config-file=compiler/.clang-tidy \
+            --extra-arg="-resource-dir=${TIDY_RESOURCE_DIR}" --warnings-as-errors='*' \
+            tidy-evidence/valid.cpp -- -std=c++17 2>&1 | tee tidy-evidence/valid-control.log
+          set +e
+          .iree-clang-tidy/clang-tidy --config-file=compiler/.clang-tidy \
+            --extra-arg="-resource-dir=${TIDY_RESOURCE_DIR}" --warnings-as-errors='*' \
+            --line-filter='[{"name":"invalid.cpp","lines":[[2,2]]}]' \
+            tidy-evidence/invalid.cpp -- -std=c++17 2>&1 | tee tidy-evidence/invalid-control.log
+          tidy_status=${PIPESTATUS[0]}
+          set -e
+          test "${tidy_status}" -eq 1
+          grep -F "invalid case style for function 'InvalidName'" tidy-evidence/invalid-control.log
+          grep -F 'readability-identifier-naming,-warnings-as-errors' tidy-evidence/invalid-control.log
+          printf '#include <stddef.h>\nint validName() { return missingValue; }\n' > tidy-evidence/compiler-error.cpp
+          set +e
+          .iree-clang-tidy/clang-tidy --config-file=compiler/.clang-tidy \
+            --extra-arg="-resource-dir=${TIDY_RESOURCE_DIR}" --warnings-as-errors='*' \
+            --line-filter='[{"name":"compiler-error.cpp","lines":[[1,1]]}]' \
+            tidy-evidence/compiler-error.cpp -- -std=c++17 2>&1 | tee tidy-evidence/compiler-error-control.log
+          tidy_status=${PIPESTATUS[0]}
+          set -e
+          test "${tidy_status}" -eq 1
+          grep -F "use of undeclared identifier 'missingValue'" tidy-evidence/compiler-error-control.log
+
+      - name: Select changed lines using the repository policy
+        run: |
+          python3 - <<'PY'
+          import json
+          import re
+          import subprocess
+          from pathlib import Path
+          files = [
+              "compiler/src/iree/compiler/Dialect/LinalgExt/IR/TilingInterfaceImpl.cpp",
+              "compiler/src/iree/compiler/DispatchCreation/ConvertDispatchRegionsToWorkgroups.cpp",
+          ]
+          line_filter = []
+          for file in files:
+              diff = subprocess.check_output([
+                  "git", "diff", "--unified=0",
+                  "6ec253ad4e259ad256c8a226f7a7a330debf937c", "HEAD", "--", file,
+              ], text=True)
+              ranges = []
+              for line in diff.splitlines():
+                  match = re.match(r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@", line)
+                  if match:
+                      start = int(match.group(1))
+                      count = int(match.group(2)) if match.group(2) is not None else 1
+                      if count:
+                          ranges.append([start, start + count - 1])
+              if not ranges:
+                  raise SystemExit(f"Required changed lines are absent: {file}")
+              line_filter.append({"name": str(Path(file).resolve()), "lines": ranges})
+          Path("tidy-evidence/line-filter.json").write_text(json.dumps(line_filter))
+          PY
+
       - name: Analyze both changed translation units
         run: |
           .iree-clang-tidy/clang-tidy -p "${BUILD_DIR}" --warnings-as-errors='*' \
+            --extra-arg="-resource-dir=${TIDY_RESOURCE_DIR}" \
+            --line-filter="$(cat tidy-evidence/line-filter.json)" \
             compiler/src/iree/compiler/Dialect/LinalgExt/IR/TilingInterfaceImpl.cpp \
             compiler/src/iree/compiler/DispatchCreation/ConvertDispatchRegionsToWorkgroups.cpp \
             2>&1 | tee tidy-evidence/analysis.log

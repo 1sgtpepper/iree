@@ -43,7 +43,7 @@ jobs:
           cp ./build_tools/scripts/fetch_cuda_deps.sh /usr/local/bin
           /usr/local/bin/fetch_cuda_deps.sh ${IREE_CUDA_DEPS_DIR}
           cat >> build_tools/bazel/iree.bazelrc << EOF
-          build --jobs=2
+          build --jobs=3
           build --local_resources=memory=8192
           build --disk_cache=${GITHUB_WORKSPACE}/.bazel-cache
           build --experimental_disk_cache_gc_max_size=1G

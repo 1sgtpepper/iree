@@ -18,7 +18,7 @@ jobs:
       run:
         shell: bash
     env:
-      CMAKE_BUILD_PARALLEL_LEVEL: 2
+      CMAKE_BUILD_PARALLEL_LEVEL: 3
       CTEST_PARALLEL_LEVEL: 2
       IREE_READ_LOCAL_CCACHE: 1
       IREE_WRITE_LOCAL_CCACHE: 1

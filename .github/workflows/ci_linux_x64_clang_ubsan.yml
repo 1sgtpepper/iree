@@ -18,7 +18,7 @@ jobs:
       run:
         shell: bash
     env:
-      CMAKE_BUILD_PARALLEL_LEVEL: 3
+      CMAKE_BUILD_PARALLEL_LEVEL: 4
       CTEST_PARALLEL_LEVEL: 2
       IREE_READ_LOCAL_CCACHE: 1
       IREE_WRITE_LOCAL_CCACHE: 1
@@ -32,7 +32,7 @@ jobs:
         uses: hendrikmuhs/ccache-action@d62db5f07c26379fc4b4e0916f098a92573c3b03 # v1.2.23
         with:
           key: ${{ github.job }}-llvm53e39b225bd1
-          max-size: 1G
+          max-size: 5G
 
       - name: Install Python requirements
         run: |
@@ -55,7 +55,17 @@ jobs:
           if (( IREE_USE_SCCACHE == 0 )); then
             source build_tools/cmake/setup_ccache.sh
           fi
-          ./build_tools/cmake/build_and_test_ubsan.sh
+          nproc
+          free -h
+          # Leave time to save the cache after stopping this build's writers.
+          setsid timeout --signal=TERM --kill-after=30s 320m ./build_tools/cmake/build_and_test_ubsan.sh &
+          build_pid=$!
+          build_status=0
+          wait "$build_pid" || build_status=$?
+          if kill -0 -- "-$build_pid" 2>/dev/null; then
+            kill -KILL -- "-$build_pid"
+          fi
           sccache --show-stats
+          exit "$build_status"
 
       # Alerting on failure is the responsibility of the calling job.

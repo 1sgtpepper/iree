@@ -87,9 +87,10 @@ jobs:
             --extra-arg="-resource-dir=${TIDY_RESOURCE_DIR}" --warnings-as-errors='*' \
             --line-filter='[{"name":"invalid.cpp","lines":[[2,2]]}]' \
             tidy-evidence/invalid.cpp -- -std=c++17 2>&1 | tee tidy-evidence/invalid-control.log
-          tidy_status=${PIPESTATUS[0]}
+          tidy_pipeline_status=("${PIPESTATUS[@]}")
           set -e
-          test "${tidy_status}" -eq 1
+          test "${tidy_pipeline_status[1]}" -eq 0
+          test "${tidy_pipeline_status[0]}" -eq 1
           grep -F "invalid case style for function 'InvalidName'" tidy-evidence/invalid-control.log
           grep -F 'readability-identifier-naming,-warnings-as-errors' tidy-evidence/invalid-control.log
           printf '#include <stddef.h>\nint validName() { return missingValue; }\n' > tidy-evidence/compiler-error.cpp
@@ -98,9 +99,10 @@ jobs:
             --extra-arg="-resource-dir=${TIDY_RESOURCE_DIR}" --warnings-as-errors='*' \
             --line-filter='[{"name":"compiler-error.cpp","lines":[[1,1]]}]' \
             tidy-evidence/compiler-error.cpp -- -std=c++17 2>&1 | tee tidy-evidence/compiler-error-control.log
-          tidy_status=${PIPESTATUS[0]}
+          tidy_pipeline_status=("${PIPESTATUS[@]}")
           set -e
-          test "${tidy_status}" -eq 1
+          test "${tidy_pipeline_status[1]}" -eq 0
+          test "${tidy_pipeline_status[0]}" -eq 1
           grep -F "use of undeclared identifier 'missingValue'" tidy-evidence/compiler-error-control.log
 
       - name: Select changed lines using the repository policy

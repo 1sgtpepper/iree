@@ -51,7 +51,7 @@ jobs:
         uses: hendrikmuhs/ccache-action@d62db5f07c26379fc4b4e0916f098a92573c3b03 # v1.2.23
         with:
           key: ${{ github.job }}-llvm53e39b225bd1
-          max-size: 5G
+          max-size: 8G
       - name: "Configuring MSVC"
         uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1.13.0
       - name: Record build resource limits
@@ -66,6 +66,16 @@ jobs:
           choco install ninja --version 1.12.1 --allow-downgrade --yes
           Import-Module $env:ChocolateyInstall\helpers\chocolateyProfile.psm1
           refreshenv
+      - name: Inspect restored compiler cache
+        if: github.repository == '1sgtpepper/iree'
+        shell: bash
+        run: |
+          IREE_CONFIGURE_ONLY=1 bash ./build_tools/cmake/build_all.sh "${{ env.BUILD_DIR_BASH }}"
+          source ./build_tools/cmake/setup_ccache.sh
+          cmake --build "${{ env.BUILD_DIR_BASH }}" --target \
+            compiler/src/iree/compiler/Dialect/LinalgExt/IR/CMakeFiles/iree_compiler_Dialect_LinalgExt_IR_IR.objects.dir/TilingInterfaceImpl.cpp.obj \
+            compiler/src/iree/compiler/DispatchCreation/CMakeFiles/iree_compiler_DispatchCreation_DispatchCreation.objects.dir/ConvertDispatchRegionsToWorkgroups.cpp.obj
+          ccache --show-stats
       - name: "Building IREE"
         shell: bash
         run: |

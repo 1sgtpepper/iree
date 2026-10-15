@@ -54,6 +54,33 @@ jobs:
           max-size: 8G
       - name: "Configuring MSVC"
         uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1.13.0
+      - name: Record initial memory commit limit
+        if: github.repository == '1sgtpepper/iree'
+        id: memory_before
+        run: |
+          $memory = Get-CimInstance Win32_PerfRawData_PerfOS_Memory
+          $memory | Select-Object AvailableBytes, CommittedBytes, CommitLimit | ConvertTo-Json -Compress
+          Get-PSDrive C, D | Select-Object Name, Used, Free | ConvertTo-Json -Compress
+          if ([UInt64]$memory.CommitLimit -eq 0) { throw "Memory commit limit is unavailable" }
+          "commit_limit=$($memory.CommitLimit)" >> $env:GITHUB_OUTPUT
+      - name: Provision hosted virtual memory
+        if: github.repository == '1sgtpepper/iree'
+        uses: al-cheb/configure-pagefile-action@b158448acc98bbaeed7513afc5c84229405b33ad
+        with:
+          minimum-size: 16GB
+          maximum-size: 16GB
+          disk-root: "D:"
+      - name: Require increased runtime commit capacity
+        if: github.repository == '1sgtpepper/iree'
+        run: |
+          $memory = Get-CimInstance Win32_PerfRawData_PerfOS_Memory
+          $memory | Select-Object AvailableBytes, CommittedBytes, CommitLimit | ConvertTo-Json -Compress
+          Get-CimInstance Win32_PageFileUsage | Select-Object Name, AllocatedBaseSize, CurrentUsage, PeakUsage | ConvertTo-Json -Compress
+          Get-PSDrive C, D | Select-Object Name, Used, Free | ConvertTo-Json -Compress
+          $before = [UInt64]'${{ steps.memory_before.outputs.commit_limit }}'
+          if ($before -eq 0 -or [UInt64]$memory.CommitLimit -lt 31GB -or [UInt64]$memory.CommitLimit -le $before) {
+            throw "Runtime commit capacity did not increase to at least 31 GiB"
+          }
       - name: Record build resource limits
         run: |
           Get-CimInstance Win32_ComputerSystem | Select-Object NumberOfLogicalProcessors, TotalPhysicalMemory
@@ -66,16 +93,6 @@ jobs:
           choco install ninja --version 1.12.1 --allow-downgrade --yes
           Import-Module $env:ChocolateyInstall\helpers\chocolateyProfile.psm1
           refreshenv
-      - name: Inspect restored compiler cache
-        if: github.repository == '1sgtpepper/iree'
-        shell: bash
-        run: |
-          IREE_CONFIGURE_ONLY=1 bash ./build_tools/cmake/build_all.sh "${{ env.BUILD_DIR_BASH }}"
-          source ./build_tools/cmake/setup_ccache.sh
-          cmake --build "${{ env.BUILD_DIR_BASH }}" --target \
-            compiler/src/iree/compiler/Dialect/LinalgExt/IR/CMakeFiles/iree_compiler_Dialect_LinalgExt_IR_IR.objects.dir/TilingInterfaceImpl.cpp.obj \
-            compiler/src/iree/compiler/DispatchCreation/CMakeFiles/iree_compiler_DispatchCreation_DispatchCreation.objects.dir/ConvertDispatchRegionsToWorkgroups.cpp.obj
-          ccache --show-stats
       - name: "Building IREE"
         shell: bash
         run: |

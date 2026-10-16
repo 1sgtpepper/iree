@@ -1,9 +1,9 @@
 {
-  "head": "dfc43d927a032f46524252ee57f49b54b18740f3",
-  "tree": "9e1449d9bf226a0aee38bfde784d4f98eb1df997",
-  "base": "6ec253ad4e259ad256c8a226f7a7a330debf937c",
+  "head": "b2295f752829d790ff36ecff3b83b4149699e74a",
+  "tree": "d015f6fe97f0c2b32f22f52ac86df66e939b3cd2",
+  "base": "89ece87b89852100c0a4ac3d515e14842d090967",
   "submodules": {
-    "third_party/llvm-project": "53e39b225bd164efeae02c9a0721021469d5bc67",
+    "third_party/llvm-project": "32d702efa29d0fdd02cff7b79dea8fdbbcf059d4",
     "third_party/flatcc": "9362cd00f0007d8cbee7bff86e90fb4b6b227ff3",
     "third_party/musl": "3f701faace7addc75d16dea8a6cd769fa5b3f260"
   }

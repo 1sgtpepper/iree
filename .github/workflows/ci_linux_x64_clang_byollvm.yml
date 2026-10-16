@@ -14,7 +14,7 @@ permissions:
   contents: read
 
 env:
-  SOURCE_SHA: dfc43d927a032f46524252ee57f49b54b18740f3
+  SOURCE_SHA: b2295f752829d790ff36ecff3b83b4149699e74a
   CCACHE_DIR: ${{ github.workspace }}/compiler-cache
   CCACHE_BASEDIR: ${{ github.workspace }}
   CCACHE_MAXSIZE: 3G
@@ -48,8 +48,8 @@ jobs:
           cp -a ci-support/.github/sort-workspace-validation suite
           mkdir -p suite/evidence
           test "$(git -C source rev-parse HEAD)" = "${SOURCE_SHA}"
-          test "$(git -C source rev-parse HEAD^{tree})" = "9e1449d9bf226a0aee38bfde784d4f98eb1df997"
-          git -C source cat-file -e 6ec253ad4e259ad256c8a226f7a7a330debf937c^{commit}
+          test "$(git -C source rev-parse HEAD^{tree})" = "d015f6fe97f0c2b32f22f52ac86df66e939b3cd2"
+          git -C source cat-file -e 89ece87b89852100c0a4ac3d515e14842d090967^{commit}
           git -C source fetch --no-tags --depth=1 origin b566531c8fcdfef29bc72c497a8305e7914159fe
           git -C source cat-file -e b566531c8fcdfef29bc72c497a8305e7914159fe^{commit}
 
@@ -85,9 +85,9 @@ jobs:
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ env.CCACHE_DIR }}
-          key: sort-workspace-cpu-v1-ubuntu24-clang18-O1-53e39b225bd1-${{ github.sha }}
+          key: sort-workspace-cpu-v1-ubuntu24-clang18-O1-32d702efa29d-${{ github.sha }}
           restore-keys: |
-            sort-workspace-cpu-v1-ubuntu24-clang18-O1-53e39b225bd1-
+            sort-workspace-cpu-v1-ubuntu24-clang18-O1-32d702efa29d-
 
       - name: Build exact source and run every required check
         run: |

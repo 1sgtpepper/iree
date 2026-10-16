@@ -1,7 +1,7 @@
 # Sort workspace CPU validation
 
 This fork-only suite builds and tests source revision
-`dfc43d927a032f46524252ee57f49b54b18740f3`, with its pinned LLVM submodule.
+`b2295f752829d790ff36ecff3b83b4149699e74a`, with its pinned LLVM submodule.
 The workflow checks out that source separately from the validation branch so
 workflow changes cannot silently change the compiler revision under test.
 
@@ -43,9 +43,10 @@ rebuilt control restores the first repair and must reproduce its specific
 local-initializer stack-limit failure. The final source initializes local empty
 producer destinations in managed storage within the original dispatch.
 
-The validation branch also provides manual Clang Tidy analysis of both changed
-translation units, including generated and builtin headers, using the exact LLVM analysis
-tool from upstream run32944069152. Tool revision/hash mismatches and compiler
+The existing manual Clang Tidy workflow remains pinned to the earlier LLVM53
+analysis tool from upstream run32944069152. It is historical validation only;
+its identity gate rejects the newer LLVM32 source. A matching tool is required
+before this workflow can validate the integrated revision. Tool revision/hash mismatches and compiler
 diagnostics fail the job. Enabled tidy warnings on changed lines fail under
 the repository's existing diff policy; deliberate lint and compiler violations
 exercise that gate. Run it with:

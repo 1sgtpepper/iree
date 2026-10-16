@@ -86,8 +86,8 @@ jobs:
           Get-CimInstance Win32_ComputerSystem | Select-Object NumberOfLogicalProcessors, TotalPhysicalMemory
       - name: "Installing IREE requirements"
         run: |
-          choco install sccache
-          choco install cmake
+          choco install sccache --no-progress -y
+          choco install cmake --no-progress -y
           # ninja pinned due to a bug in the 1.13.0 release:
           # https://github.com/ninja-build/ninja/issues/2616
           choco install ninja --version 1.12.1 --allow-downgrade --yes

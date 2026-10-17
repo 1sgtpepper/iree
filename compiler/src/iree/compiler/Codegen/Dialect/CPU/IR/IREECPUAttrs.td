@@ -127,7 +127,14 @@ def IREECPU_DataTiledMMAAttr
           DefaultValuedParameter<
               "::mlir::Type", "::mlir::Type()",
               "ACC element type, used only by type-polymorphic intrinsics "
-              "such as MMA_GENERIC_SCALAR_1x1x1.">:$acc_type);
+              "such as MMA_GENERIC_SCALAR_1x1x1.">:$acc_type,
+          DefaultValuedParameter<
+              "int64_t", "0",
+              "Vector register length in bits, for intrinsics whose tile "
+              "shape and register budget are a function of an "
+              "implementation-defined vector length (RISC-V V).">:$vlen);
+
+  let genVerifyDecl = 1;
 }
 
 //===----------------------------------------------------------------------===//
@@ -244,6 +251,35 @@ def IREECPU_LoweringConfigAttr :
 
     /// Returns a vector that contains all the tiling information in the config.
     SmallVector<LoweringConfigLevelInfo> getAvailableTilingInfo();
+  }];
+  let hasCustomAssemblyFormat = 1;
+  let genVerifyDecl = 1;
+}
+
+def IREECPU_InnerTileAlignmentsAttr :
+    AttrDef<IREECPU_Dialect, "InnerTileAlignments"> {
+  let mnemonic = "inner_tile_alignments";
+  let summary = [{Per-tiling-level inner-tile alignment hints for pack/unpack ops.}];
+  let description = [{
+    A discardable hint attached to a scalable `linalg.pack`/`linalg.unpack`
+    during tile-size selection, recording, per tiling level, the
+    `mlir::InnerTileAlignment` (`Unknown`, `Multiple` or `Equal`) of each
+    iteration-domain dimension.
+  }];
+  let parameters = (ins
+    AttrParameter<"DictionaryAttr",
+        "Maps a tiling-level name to its per-dim InnerTileAlignment array.">:$alignments
+  );
+  let extraClassDeclaration = [{
+    /// Builds a hint from per-tiling-level `InnerTileAlignment` values and attaches
+    ///  it to `op` under the attribute's mnemonic, overwriting any existing one.
+    static void setOnOp(
+        ::mlir::Operation *op,
+        ::llvm::ArrayRef<
+            ::std::pair<TilingLevel, ::llvm::SmallVector<int64_t>>> perLevel);
+
+    /// Returns the hint attached to `op`, or a null attribute if it has none.
+    static InnerTileAlignmentsAttr getFromOp(::mlir::Operation *op);
   }];
   let hasCustomAssemblyFormat = 1;
   let genVerifyDecl = 1;

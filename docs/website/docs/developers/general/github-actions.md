@@ -81,11 +81,8 @@ These workflows build the project from source then run unit tests.
 Workflow file | Build status | Event triggers
 -- | --: | --
 [`ci.yml`](https://github.com/iree-org/iree/blob/main/.github/workflows/ci.yml) | [![cI](https://github.com/iree-org/iree/actions/workflows/ci.yml/badge.svg?query=branch%3Amain+event%3Apush)](https://github.com/iree-org/iree/actions/workflows/ci.yml?query=branch%3Amain+event%3Apush) | `pull_request`, `push`
- | |
 [`ci_linux_arm64_clang.yml`](https://github.com/iree-org/iree/blob/main/.github/workflows/ci_linux_arm64_clang.yml) | [![CI - Linux arm64 clang](https://github.com/iree-org/iree/actions/workflows/ci_linux_arm64_clang.yml/badge.svg?query=branch%3Amain+event%3Aschedule)](https://github.com/iree-org/iree/actions/workflows/ci_linux_arm64_clang.yml?query=branch%3Amain+event%3Aschedule) | `schedule`
-[`ci_macos_x64_clang.yml`](https://github.com/iree-org/iree/blob/main/.github/workflows/ci_macos_x64_clang.yml) | [![CI - macOS x64 clang](https://github.com/iree-org/iree/actions/workflows/ci_macos_x64_clang.yml/badge.svg?query=branch%3Amain+event%3Aschedule)](https://github.com/iree-org/iree/actions/workflows/ci_macos_x64_clang.yml?query=branch%3Amain+event%3Aschedule) | `schedule`
 [`ci_macos_arm64_clang.yml`](https://github.com/iree-org/iree/blob/main/.github/workflows/ci_macos_arm64_clang.yml) | [![CI - macOS x64 clang](https://github.com/iree-org/iree/actions/workflows/ci_macos_arm64_clang.yml/badge.svg?query=branch%3Amain+event%3Aschedule)](https://github.com/iree-org/iree/actions/workflows/ci_macos_arm64_clang.yml?query=branch%3Amain+event%3Aschedule) | `schedule`
- | |
 [`ci_linux_x64_clang_byollvm.yml`](https://github.com/iree-org/iree/blob/main/.github/workflows/ci_linux_x64_clang_byollvm.yml) | [![CI - Linux x64 clang_byollvm](https://github.com/iree-org/iree/actions/workflows/ci_linux_x64_clang_byollvm.yml/badge.svg?query=branch%3Amain+event%3Aschedule)](https://github.com/iree-org/iree/actions/workflows/ci_linux_x64_clang_byollvm.yml?query=branch%3Amain+event%3Aschedule) | `schedule`
 [`ci_linux_x64_clang_debug.yml`](https://github.com/iree-org/iree/blob/main/.github/workflows/ci_linux_x64_clang_debug.yml) | [![CI - Linux x64 clang debug](https://github.com/iree-org/iree/actions/workflows/ci_linux_x64_clang_debug.yml/badge.svg?query=branch%3Amain+event%3Aschedule)](https://github.com/iree-org/iree/actions/workflows/ci_linux_x64_clang_debug.yml?query=branch%3Amain+event%3Aschedule) | `schedule`
 [`ci_linux_x64_clang_tsan.yml`](https://github.com/iree-org/iree/blob/main/.github/workflows/ci_linux_x64_clang_tsan.yml) | [![CI - Linux x64 clang TSan](https://github.com/iree-org/iree/actions/workflows/ci_linux_x64_clang_tsan.yml/badge.svg?query=branch%3Amain+event%3Aschedule)](https://github.com/iree-org/iree/actions/workflows/ci_linux_x64_clang_tsan.yml?query=branch%3Amain+event%3Aschedule) | `schedule`
@@ -244,6 +241,28 @@ Any workflow that runs on the `pull_request` event can be either optional
 
     Required checks must use only either standard GitHub-hosted runners or
     runners from the CPU builder pool.
+
+#### Stacked pull requests
+
+For native GitHub stacks, CI and PkgCI run their selected build and test jobs
+only for the lowest unmerged pull request. This is the PR whose base branch
+matches the stack's base branch. It uses the normal presubmit job selection,
+including file filters and PR description trailers. Non-stacked PRs are
+unaffected.
+
+Upper stack PRs still run setup, which reports that CI is deferred and selects
+no build or test jobs. Clang-tidy is also skipped. DCO and pre-commit retain
+their existing behavior on every layer. Both summary jobs still run, but
+`ci_summary` explicitly fails (with an explanation) to prevent the untested PR
+to merge together with the bottom PR.
+
+After the bottom PR merges, the remaining PRs rebase. CI relies on the rebase
+of the remaining stack to reevaluate and trigger test jobs. The next PR then
+becomes eligible for normal presubmit CI.
+
+PR description trailers such as `ci-extra` and `ci-exactly` cannot override
+stack deferral. Scheduled and postsubmit workflows are unaffected. One can
+still manually dispatch a workflow on a PR that is higher in the stack.
 
 #### :octicons-skip-16: Opt-in for presubmit jobs
 

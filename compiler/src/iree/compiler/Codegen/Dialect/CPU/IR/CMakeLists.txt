@@ -40,6 +40,8 @@ iree_cc_library(
     MLIRParser
     MLIRSupport
     MLIRTensorDialect
+    MLIRTilingInterface
+    MLIRUBDialect
     MLIRVectorDialect
     iree::compiler::Codegen::Dialect::Codegen::IR::IREECodegenDialect
     iree::compiler::Codegen::Dialect::Codegen::Utils

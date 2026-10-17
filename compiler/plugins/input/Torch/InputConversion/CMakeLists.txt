@@ -41,10 +41,12 @@ iree_cc_library(
     "BindSymbolicShapes.cpp"
     "BitCastTensor.cpp"
     "ConvertTMTensorToLinalgExt.cpp"
+    "ConvertTorchQuantizationToLinalgExt.cpp"
     "ConvertTorchUnstructuredToLinalgExt.cpp"
     "FuncConversion.cpp"
     "Passes.cpp"
     "SetStrictSymbolicShapes.cpp"
+    "SyncFuncConversion.cpp"
   DEPS
     ::PassHeaders
     ::PassesIncGen
@@ -63,6 +65,7 @@ iree_cc_library(
     MLIRSCFDialect
     MLIRSupport
     MLIRTensorDialect
+    MLIRTensorUtils
     MLIRTransformUtils
     MLIRTransforms
     iree::compiler::Dialect::Flow::IR

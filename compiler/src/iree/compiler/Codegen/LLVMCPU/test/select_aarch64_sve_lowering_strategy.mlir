@@ -1,7 +1,7 @@
 // RUN: iree-opt --pass-pipeline='builtin.module(iree-llvmcpu-select-lowering-strategy)' \
 // RUN:   --iree-llvmcpu-enable-scalable-vectorization=true --split-input-file %s | FileCheck %s
 
-#executable_target_embedded_elf_arm_64_ = #hal.executable.target<"llvm-cpu", "embedded-elf-arm_64", {cpu_features = "+sve", data_layout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-f80:128-n8:16:32:64-S128", native_vector_size = 16 : index, target_triple = "aarch64-none-elf"}>
+#executable_target_embedded_elf_arm_64_ = #hal.executable.target<"llvm-cpu", "embedded-elf-arm_64", {cpu_features = "+sve", data_layout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-f80:128-n8:16:32:64-S128", native_vector_size = 16 : index, target_triple = "aarch64-none-elf", vscale_range = [1, 16]}>
 func.func @matmul_tensors(%7: tensor<?x?xf32>, %8: tensor<?x?xf32>, %9: tensor<?x?xf32>) -> tensor<?x?xf32> attributes {hal.executable.target = #executable_target_embedded_elf_arm_64_} {
   %10 = linalg.matmul ins(%7, %8 : tensor<?x?xf32>, tensor<?x?xf32>) outs(%9 : tensor<?x?xf32>) -> tensor<?x?xf32>
   return %10 : tensor<?x?xf32>
@@ -16,7 +16,7 @@ func.func @matmul_tensors(%7: tensor<?x?xf32>, %8: tensor<?x?xf32>, %9: tensor<?
 // -----
 
 // Check tile sizes depend on output element type - altering output element type changes tile sizes.
-#executable_target_embedded_elf_arm_64_ = #hal.executable.target<"llvm-cpu", "embedded-elf-arm_64", {cpu_features = "+sve", data_layout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-f80:128-n8:16:32:64-S128", native_vector_size = 16 : index, target_triple = "aarch64-none-elf"}>
+#executable_target_embedded_elf_arm_64_ = #hal.executable.target<"llvm-cpu", "embedded-elf-arm_64", {cpu_features = "+sve", data_layout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-f80:128-n8:16:32:64-S128", native_vector_size = 16 : index, target_triple = "aarch64-none-elf", vscale_range = [1, 16]}>
 func.func @matmul_tensors_f16(%7: tensor<?x?xf16>, %8: tensor<?x?xf16>, %9: tensor<?x?xf16>) -> tensor<?x?xf16> attributes {hal.executable.target = #executable_target_embedded_elf_arm_64_} {
   %10 = linalg.matmul ins(%7, %8 : tensor<?x?xf16>, tensor<?x?xf16>) outs(%9 : tensor<?x?xf16>) -> tensor<?x?xf16>
   return %10 : tensor<?x?xf16>
@@ -31,7 +31,7 @@ func.func @matmul_tensors_f16(%7: tensor<?x?xf16>, %8: tensor<?x?xf16>, %9: tens
 // -----
 
 // Check tile sizes depend on output element type - keeping output element type keeps tile sizes.
-#executable_target_embedded_elf_arm_64_ = #hal.executable.target<"llvm-cpu", "embedded-elf-arm_64", {cpu_features = "+sve", data_layout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-f80:128-n8:16:32:64-S128", native_vector_size = 16 : index, target_triple = "aarch64-none-elf"}>
+#executable_target_embedded_elf_arm_64_ = #hal.executable.target<"llvm-cpu", "embedded-elf-arm_64", {cpu_features = "+sve", data_layout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-f80:128-n8:16:32:64-S128", native_vector_size = 16 : index, target_triple = "aarch64-none-elf", vscale_range = [1, 16]}>
 func.func @matmul_tensors_i8i8_i32(%7: tensor<?x?xi8>, %8: tensor<?x?xi8>, %9: tensor<?x?xi32>) -> tensor<?x?xi32> attributes {hal.executable.target = #executable_target_embedded_elf_arm_64_} {
   %10 = linalg.matmul ins(%7, %8 : tensor<?x?xi8>, tensor<?x?xi8>) outs(%9 : tensor<?x?xi32>) -> tensor<?x?xi32>
   return %10 : tensor<?x?xi32>
@@ -45,7 +45,7 @@ func.func @matmul_tensors_i8i8_i32(%7: tensor<?x?xi8>, %8: tensor<?x?xi8>, %9: t
 
 // -----
 
-#executable_target_embedded_elf_arm_64_ = #hal.executable.target<"llvm-cpu", "embedded-elf-arm_64", {cpu_features = "+sve", data_layout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-f80:128-n8:16:32:64-S128", native_vector_size = 16 : index, target_triple = "aarch64-none-elf"}>
+#executable_target_embedded_elf_arm_64_ = #hal.executable.target<"llvm-cpu", "embedded-elf-arm_64", {cpu_features = "+sve", data_layout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-f80:128-n8:16:32:64-S128", native_vector_size = 16 : index, target_triple = "aarch64-none-elf", vscale_range = [1, 16]}>
 func.func @static_tensors_non_pow_two_sizes(%3: tensor<15x14xf32>, %4: tensor<14x7xf32>, %5: tensor<15x7xf32>) -> tensor<15x7xf32> attributes {hal.executable.target = #executable_target_embedded_elf_arm_64_} {
   %6 = linalg.matmul ins(%3, %4 : tensor<15x14xf32>, tensor<14x7xf32>) outs(%5 : tensor<15x7xf32>) -> tensor<15x7xf32>
   return %6 : tensor<15x7xf32>
@@ -59,7 +59,7 @@ func.func @static_tensors_non_pow_two_sizes(%3: tensor<15x14xf32>, %4: tensor<14
 
 // -----
 
-#executable_target_embedded_elf_arm_64_ = #hal.executable.target<"llvm-cpu", "embedded-elf-arm_64", {cpu_features = "+sve", data_layout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-f80:128-n8:16:32:64-S128", native_vector_size = 16 : index, target_triple = "aarch64-none-elf"}>
+#executable_target_embedded_elf_arm_64_ = #hal.executable.target<"llvm-cpu", "embedded-elf-arm_64", {cpu_features = "+sve", data_layout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-f80:128-n8:16:32:64-S128", native_vector_size = 16 : index, target_triple = "aarch64-none-elf", vscale_range = [1, 16]}>
 func.func @static_tensors_1x1(%3: tensor<1x1xf32>, %4: tensor<1x1xf32>, %5: tensor<1x1xf32>) -> tensor<1x1xf32> attributes {hal.executable.target = #executable_target_embedded_elf_arm_64_} {
   %6 = linalg.matmul ins(%3, %4 : tensor<1x1xf32>, tensor<1x1xf32>) outs(%5 : tensor<1x1xf32>) -> tensor<1x1xf32>
   return %6 : tensor<1x1xf32>
@@ -74,7 +74,7 @@ func.func @static_tensors_1x1(%3: tensor<1x1xf32>, %4: tensor<1x1xf32>, %5: tens
 // -----
 
 // f64 matmul on an SVE-only target.
-#executable_target_embedded_elf_arm_64_ = #hal.executable.target<"llvm-cpu", "embedded-elf-arm_64", {cpu_features = "+sve", data_layout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-f80:128-n8:16:32:64-S128", native_vector_size = 16 : index, target_triple = "aarch64-none-elf"}>
+#executable_target_embedded_elf_arm_64_ = #hal.executable.target<"llvm-cpu", "embedded-elf-arm_64", {cpu_features = "+sve", data_layout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-f80:128-n8:16:32:64-S128", native_vector_size = 16 : index, target_triple = "aarch64-none-elf", vscale_range = [1, 16]}>
 func.func @matmul_tensors_f64(%7: tensor<?x?xf64>, %8: tensor<?x?xf64>, %9: tensor<?x?xf64>) -> tensor<?x?xf64> attributes {hal.executable.target = #executable_target_embedded_elf_arm_64_} {
   %10 = linalg.matmul ins(%7, %8 : tensor<?x?xf64>, tensor<?x?xf64>) outs(%9 : tensor<?x?xf64>) -> tensor<?x?xf64>
   return %10 : tensor<?x?xf64>
@@ -88,7 +88,7 @@ func.func @matmul_tensors_f64(%7: tensor<?x?xf64>, %8: tensor<?x?xf64>, %9: tens
 
 // -----
 
-#executable_target_system_elf_arm_64_ = #hal.executable.target<"llvm-cpu", "system-elf-arm_64", {cpu = "", cpu_features = "+v9a,+sve", data_layout = "e-m:e-i8:8:32-i16:16:32-i64:64-i128:128-n32:64-S128", link_embedded = false, native_vector_size = 16 : index, target_triple = "aarch64-none-linux-android34"}>
+#executable_target_system_elf_arm_64_ = #hal.executable.target<"llvm-cpu", "system-elf-arm_64", {cpu = "", cpu_features = "+v9a,+sve", data_layout = "e-m:e-i8:8:32-i16:16:32-i64:64-i128:128-n32:64-S128", link_embedded = false, native_vector_size = 16 : index, target_triple = "aarch64-none-linux-android34", vscale_range = [1, 16]}>
 #map = affine_map<(d0, d1) -> (d0, d1)>
 #map1 = affine_map<(d0, d1) -> (d0)>
 #map2 = affine_map<(d0, d1) -> (d1)>
@@ -124,7 +124,7 @@ func.func @matmul_with_fill(%15: tensor<1024x256xi8>, %16: tensor<256x256xi8>, %
 #pipeline_layout = #hal.pipeline.layout<constants = 0, bindings = [
   #hal.pipeline.binding<storage_buffer>
 ]>
-#executable_target_system_elf_arm_64_ = #hal.executable.target<"llvm-cpu", "system-elf-arm_64", {cpu = "", cpu_features = "+v9a,+sve", data_layout = "e-m:e-i8:8:32-i16:16:32-i64:64-i128:128-n32:64-S128", link_embedded = false, native_vector_size = 16 : index, target_triple = "aarch64-none-linux-android34"}>
+#executable_target_system_elf_arm_64_ = #hal.executable.target<"llvm-cpu", "system-elf-arm_64", {cpu = "", cpu_features = "+v9a,+sve", data_layout = "e-m:e-i8:8:32-i16:16:32-i64:64-i128:128-n32:64-S128", link_embedded = false, native_vector_size = 16 : index, target_triple = "aarch64-none-linux-android34", vscale_range = [1, 16]}>
 #map = affine_map<()[s0] -> (256 ceildiv s0)>
 func.func @mmt4d_tensors(%arg0: tensor<32x128x8x1xf32>, %arg1 : tensor<?x128x?x1xf32>) -> tensor<32x?x8x?xf32> attributes {hal.executable.target = #executable_target_system_elf_arm_64_} {
   %c8 = arith.constant 8 : index
@@ -146,7 +146,7 @@ func.func @mmt4d_tensors(%arg0: tensor<32x128x8x1xf32>, %arg1 : tensor<?x128x?x1
 
 // -----
 
-#executable_target_system_elf_arm_64_ = #hal.executable.target<"llvm-cpu", "system-elf-arm_64", {cpu = "", cpu_features = "+v9a,+sve", data_layout = "e-m:e-i8:8:32-i16:16:32-i64:64-i128:128-n32:64-S128", link_embedded = false, native_vector_size = 16 : index, target_triple = "aarch64-none-linux-android34"}>
+#executable_target_system_elf_arm_64_ = #hal.executable.target<"llvm-cpu", "system-elf-arm_64", {cpu = "", cpu_features = "+v9a,+sve", data_layout = "e-m:e-i8:8:32-i16:16:32-i64:64-i128:128-n32:64-S128", link_embedded = false, native_vector_size = 16 : index, target_triple = "aarch64-none-linux-android34", vscale_range = [1, 16]}>
 #map = affine_map<()[s0] -> (256 ceildiv s0)>
 func.func @mmtd4_with_fill(%arg0 : tensor<32x128x8x1xf32>, %arg1 : tensor<?x128x?x1xf32>) -> tensor<32x?x8x?xf32> attributes {hal.executable.target = #executable_target_system_elf_arm_64_} {
   %cst = arith.constant 0.000000e+00 : f32
@@ -171,7 +171,7 @@ func.func @mmtd4_with_fill(%arg0 : tensor<32x128x8x1xf32>, %arg1 : tensor<?x128x
 
 // -----
 
-#executable_target_system_elf_arm_64_ = #hal.executable.target<"llvm-cpu", "system-elf-arm_64", {cpu = "", cpu_features = "+v9a,+sve", data_layout = "e-m:e-i8:8:32-i16:16:32-i64:64-i128:128-n32:64-S128", link_embedded = false, native_vector_size = 16 : index, target_triple = "aarch64-none-linux-android34"}>
+#executable_target_system_elf_arm_64_ = #hal.executable.target<"llvm-cpu", "system-elf-arm_64", {cpu = "", cpu_features = "+v9a,+sve", data_layout = "e-m:e-i8:8:32-i16:16:32-i64:64-i128:128-n32:64-S128", link_embedded = false, native_vector_size = 16 : index, target_triple = "aarch64-none-linux-android34", vscale_range = [1, 16]}>
 #map = affine_map<()[s0] -> (320 ceildiv s0)>
 func.func @unpack(%arg0 : tensor<128x10x?x8x?xf32>) -> tensor<128x80x320xf32> attributes {hal.executable.target = #executable_target_system_elf_arm_64_} {
   %c8 = arith.constant 8 : index
@@ -189,11 +189,12 @@ func.func @unpack(%arg0 : tensor<128x10x?x8x?xf32>) -> tensor<128x80x320xf32> at
 //       CHECK: func.func @unpack
 //  CHECK-SAME:     translation_info = #[[TRANSLATION]]
 //       CHECK:   linalg.unpack
+//  CHECK-SAME:       inner_tile_alignments = #iree_cpu.inner_tile_alignments<vector_common_parallel = [Unknown, Unknown, Equal]>
 //  CHECK-SAME:       lowering_config = #[[CONFIG]]
 
 // -----
 
-#executable_target_system_elf_arm_64_ = #hal.executable.target<"llvm-cpu", "system-elf-arm_64", {cpu = "", cpu_features = "+v9a,+sve", data_layout = "e-m:e-i8:8:32-i16:16:32-i64:64-i128:128-n32:64-S128", native_vector_size = 16 : index, target_triple = "aarch64-none-linux-android34"}>
+#executable_target_system_elf_arm_64_ = #hal.executable.target<"llvm-cpu", "system-elf-arm_64", {cpu = "", cpu_features = "+v9a,+sve", data_layout = "e-m:e-i8:8:32-i16:16:32-i64:64-i128:128-n32:64-S128", native_vector_size = 16 : index, target_triple = "aarch64-none-linux-android34", vscale_range = [1, 16]}>
 func.func @unpack_outer_dynamic(%arg0 : tensor<?x?x32x?xi32>, %dim0 : index, %dim1 : index) -> tensor<?x?xi32> attributes {hal.executable.target = #executable_target_system_elf_arm_64_} {
   %c8 = arith.constant 8 : index
   %vscale = vector.vscale
@@ -210,11 +211,33 @@ func.func @unpack_outer_dynamic(%arg0 : tensor<?x?x32x?xi32>, %dim0 : index, %di
 //       CHECK: func.func @unpack_outer_dynamic
 //  CHECK-SAME:     translation_info = #[[TRANSLATION]]
 //       CHECK:   linalg.unpack
+//  CHECK-SAME:       inner_tile_alignments = #iree_cpu.inner_tile_alignments<vector_common_parallel = [Unknown, Equal]>
 //  CHECK-SAME:       lowering_config = #[[CONFIG]]
 
 // -----
 
-#executable_target_system_elf_arm_64_ = #hal.executable.target<"llvm-cpu", "system-elf-arm_64", {cpu = "", cpu_features = "+v9a,+sve", data_layout = "e-m:e-i8:8:32-i16:16:32-i64:64-i128:128-n32:64-S128", link_embedded = false, native_vector_size = 16 : index, target_triple = "aarch64-none-linux-android34"}>
+// Transposed `inner_dims_pos` puts the scalable inner tile on the first (rather
+// than the last) result dimension, so the hint's `Equal` must match that.
+#executable_target_system_elf_arm_64_ = #hal.executable.target<"llvm-cpu", "system-elf-arm_64", {cpu = "", cpu_features = "+v9a,+sve", data_layout = "e-m:e-i8:8:32-i16:16:32-i64:64-i128:128-n32:64-S128", link_embedded = false, native_vector_size = 16 : index, target_triple = "aarch64-none-linux-android34", vscale_range = [1, 16]}>
+func.func @unpack_transposed(%arg0 : tensor<?x?x32x?xf32>, %dim0 : index, %dim1 : index) -> tensor<?x?xf32> attributes {hal.executable.target = #executable_target_system_elf_arm_64_} {
+  %c8 = arith.constant 8 : index
+  %vscale = vector.vscale
+  %c8_vscale = arith.muli %vscale, %c8 : index
+  %init = tensor.empty(%dim0, %dim1) : tensor<?x?xf32>
+  %unpack = linalg.unpack %arg0 inner_dims_pos = [1, 0] inner_tiles = [32, %c8_vscale] into %init : tensor<?x?x32x?xf32> -> tensor<?x?xf32>
+  return %unpack : tensor<?x?xf32>
+}
+//   CHECK-DAG: #[[CONFIG:.+]] = #iree_cpu.lowering_config<distribution = [64, 64], vector_common_parallel = {{\[\[}}8], 32]>
+//   CHECK-DAG: #[[TRANSLATION:.+]] = #iree_codegen.translation_info<pipeline = #iree_cpu.pipeline<DataTiling>
+//       CHECK: func.func @unpack_transposed
+//  CHECK-SAME:     translation_info = #[[TRANSLATION]]
+//       CHECK:   linalg.unpack
+//  CHECK-SAME:       inner_tile_alignments = #iree_cpu.inner_tile_alignments<vector_common_parallel = [Equal, Unknown]>
+//  CHECK-SAME:       lowering_config = #[[CONFIG]]
+
+// -----
+
+#executable_target_system_elf_arm_64_ = #hal.executable.target<"llvm-cpu", "system-elf-arm_64", {cpu = "", cpu_features = "+v9a,+sve", data_layout = "e-m:e-i8:8:32-i16:16:32-i64:64-i128:128-n32:64-S128", link_embedded = false, native_vector_size = 16 : index, target_triple = "aarch64-none-linux-android34", vscale_range = [1, 16]}>
 func.func @unpack_fully_dynamic(%arg0 : tensor<?x?x?x?xi32>, %m0 : index, %n0 : index, %m : index, %n : index) -> tensor<?x?xi32> attributes {hal.executable.target = #executable_target_system_elf_arm_64_} {
   %init = tensor.empty(%m, %n) : tensor<?x?xi32>
   %unpack = linalg.unpack %arg0 inner_dims_pos = [0, 1] inner_tiles = [%m0, %n0] into %init : tensor<?x?x?x?xi32> -> tensor<?x?xi32>
@@ -227,6 +250,7 @@ func.func @unpack_fully_dynamic(%arg0 : tensor<?x?x?x?xi32>, %m0 : index, %n0 : 
 //       CHECK: func.func @unpack_fully_dynamic
 //  CHECK-SAME:     translation_info = #[[TRANSLATION]]
 //       CHECK:   linalg.unpack
+//  CHECK-NOT:        inner_tile_alignments
 //  CHECK-SAME:       lowering_config = #[[CONFIG]]
 
 // -----
@@ -234,7 +258,7 @@ func.func @unpack_fully_dynamic(%arg0 : tensor<?x?x?x?xi32>, %m0 : index, %n0 : 
 #map = affine_map<(d0, d1, d2) -> (d0, d1)>
 #map1 = affine_map<(d0, d1, d2) -> (d0, d2, d1)>
 #map2 = affine_map<(d0, d1, d2) -> (d0, d1, d2)>
-#executable_target_system_elf_arm_64_ = #hal.executable.target<"llvm-cpu", "system-elf-arm_64", {cpu = "", cpu_features = "+v9a,+sve", data_layout = "e-m:e-i8:8:32-i16:16:32-i64:64-i128:128-n32:64-S128", link_embedded = false, native_vector_size = 16 : index, target_triple = "aarch64-none-linux-android34"}>
+#executable_target_system_elf_arm_64_ = #hal.executable.target<"llvm-cpu", "system-elf-arm_64", {cpu = "", cpu_features = "+v9a,+sve", data_layout = "e-m:e-i8:8:32-i16:16:32-i64:64-i128:128-n32:64-S128", link_embedded = false, native_vector_size = 16 : index, target_triple = "aarch64-none-linux-android34", vscale_range = [1, 16]}>
 func.func @unpack_with_generic(%arg0 : tensor<128x10x?x8x?xf32>, %arg1 : tensor<128x320xf32>) -> tensor<128x320x80xf32> attributes {hal.executable.target = #executable_target_system_elf_arm_64_} {
   %c8 = arith.constant 8 : index
   %vscale = vector.vscale
@@ -255,13 +279,14 @@ func.func @unpack_with_generic(%arg0 : tensor<128x10x?x8x?xf32>, %arg1 : tensor<
 //       CHECK: func.func @unpack_with_generic
 //  CHECK-SAME:     translation_info = #[[TRANSLATION]]
 //       CHECK:   linalg.unpack
+//  CHECK-SAME:       inner_tile_alignments = #iree_cpu.inner_tile_alignments<vector_common_parallel = [Unknown, Unknown, Equal]>
 //  CHECK-SAME:       lowering_config = #[[CONFIG_UNPACK]]
 //       CHECK:   linalg.generic
 //  CHECK-SAME:       lowering_config = #[[CONFIG_GENERIC]]
 
 // -----
 
-#executable_target_system_elf_arm_64_ = #hal.executable.target<"llvm-cpu", "system-elf-arm_64", {cpu = "", cpu_features = "+v9a,+sve", data_layout = "e-m:e-i8:8:32-i16:16:32-i64:64-i128:128-n32:64-S128", link_embedded = false, native_vector_size = 16 : index, target_triple = "aarch64-none-linux-android34"}>
+#executable_target_system_elf_arm_64_ = #hal.executable.target<"llvm-cpu", "system-elf-arm_64", {cpu = "", cpu_features = "+v9a,+sve", data_layout = "e-m:e-i8:8:32-i16:16:32-i64:64-i128:128-n32:64-S128", link_embedded = false, native_vector_size = 16 : index, target_triple = "aarch64-none-linux-android34", vscale_range = [1, 16]}>
 #map_pack = affine_map<()[s0] -> (48 ceildiv s0)>
 func.func @pack(%arg0: tensor<20x48xf32>) -> tensor<2x?x16x?xf32> attributes {hal.executable.target = #executable_target_system_elf_arm_64_} {
   %cst = arith.constant 0.000000e+00 : f32
@@ -278,11 +303,12 @@ func.func @pack(%arg0: tensor<20x48xf32>) -> tensor<2x?x16x?xf32> attributes {ha
 //      CHECK: func.func @pack(
 // CHECK-SAME:     translation_info = #[[TRANSLATION]]
 //      CHECK:   linalg.pack
+// CHECK-SAME:       inner_tile_alignments = #iree_cpu.inner_tile_alignments<vector_common_parallel = [Unknown, Equal]>
 // CHECK-SAME:       lowering_config = #[[CONFIG]]
 
 // -----
 
-#executable_target_system_elf_arm_64_ = #hal.executable.target<"llvm-cpu", "system-elf-arm_64", {cpu = "", cpu_features = "+v9a,+sve", data_layout = "e-m:e-i8:8:32-i16:16:32-i64:64-i128:128-n32:64-S128", link_embedded = false, native_vector_size = 16 : index, target_triple = "aarch64-none-linux-android34"}>
+#executable_target_system_elf_arm_64_ = #hal.executable.target<"llvm-cpu", "system-elf-arm_64", {cpu = "", cpu_features = "+v9a,+sve", data_layout = "e-m:e-i8:8:32-i16:16:32-i64:64-i128:128-n32:64-S128", link_embedded = false, native_vector_size = 16 : index, target_triple = "aarch64-none-linux-android34", vscale_range = [1, 16]}>
 #map_elem_pack = affine_map<()[s0] -> (384 ceildiv s0)>
 #map = affine_map<(d0, d1) -> (d0, d1)>
 func.func @elem_pack(%arg0: tensor<128x384xf32>) -> tensor<16x?x8x?xf32> attributes {hal.executable.target = #executable_target_system_elf_arm_64_} {
@@ -308,11 +334,12 @@ func.func @elem_pack(%arg0: tensor<128x384xf32>) -> tensor<16x?x8x?xf32> attribu
 //      CHECK:   linalg.generic
 // CHECK-SAME:       lowering_config = #[[CONFIG1]]
 //      CHECK:   linalg.pack
+// CHECK-SAME:       inner_tile_alignments = #iree_cpu.inner_tile_alignments<vector_common_parallel = [Unknown, Equal]>
 // CHECK-SAME:       lowering_config = #[[CONFIG2]]
 
 // -----
 
-#executable_target_system_elf_arm_64_ = #hal.executable.target<"llvm-cpu", "system-elf-arm_64", {cpu = "", cpu_features = "+v9a,+sve", data_layout = "e-m:e-i8:8:32-i16:16:32-i64:64-i128:128-n32:64-S128", native_vector_size = 16 : index, target_triple = "aarch64-none-linux-android34"}>
+#executable_target_system_elf_arm_64_ = #hal.executable.target<"llvm-cpu", "system-elf-arm_64", {cpu = "", cpu_features = "+v9a,+sve", data_layout = "e-m:e-i8:8:32-i16:16:32-i64:64-i128:128-n32:64-S128", native_vector_size = 16 : index, target_triple = "aarch64-none-linux-android34", vscale_range = [1, 16]}>
 #map_rb0 = affine_map<(d0, d1) -> (d0, d1)>
 #map_rb1 = affine_map<(d0, d1) -> (d0)>
 #map_rb_outer = affine_map<()[s0] -> (1024 ceildiv s0)>
@@ -354,11 +381,12 @@ func.func @reduction_broadcast_pack(%arg0: tensor<384x1024xf32>, %arg1: tensor<3
 //      CHECK:   linalg.generic
 // CHECK-SAME:       lowering_config = #[[CONFIG3]]
 //      CHECK:   linalg.pack
+// CHECK-SAME:       inner_tile_alignments = #iree_cpu.inner_tile_alignments<vector_inner_parallel = [Unknown, Equal]>
 // CHECK-SAME:       lowering_config = #[[CONFIG4]]
 
 // -----
 
-#executable_target_system_elf_arm_64_ = #hal.executable.target<"llvm-cpu", "system-elf-arm_64", {cpu = "generic", cpu_features = "+sve", data_layout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-f80:128-n8:16:32:64-S128", native_vector_size = 16 : index, target_triple = "aarch64-none-elf", ukernels = false}>
+#executable_target_system_elf_arm_64_ = #hal.executable.target<"llvm-cpu", "system-elf-arm_64", {cpu = "generic", cpu_features = "+sve", data_layout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-f80:128-n8:16:32:64-S128", native_vector_size = 16 : index, target_triple = "aarch64-none-elf", vscale_range = [1, 16], ukernels = false}>
 #map_tp0 = affine_map<(d0, d1) -> (d1, d0)>
 #map_tp1 = affine_map<(d0, d1) -> (d0, d1)>
 #map_tp_outer = affine_map<()[s0] -> (30522 ceildiv s0)>
@@ -385,11 +413,12 @@ func.func @transpose_pack(%arg0: tensor<30522x768xf32>) -> tensor<?x96x?x8xf32> 
 //      CHECK:   linalg.generic
 // CHECK-SAME:       lowering_config = #[[CONFIG1]]
 //      CHECK:   linalg.pack
+// CHECK-SAME:       inner_tile_alignments = #iree_cpu.inner_tile_alignments<vector_common_parallel = [Unknown, Equal]>
 // CHECK-SAME:       lowering_config = #[[CONFIG2]]
 
 // -----
 
-#executable_target_system_elf_arm_64_ = #hal.executable.target<"llvm-cpu", "system-elf-arm_64", {cpu = "generic", cpu_features = "+sve", data_layout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-f80:128-n8:16:32:64-S128", native_vector_size = 16 : index, target_triple = "aarch64-none-elf", ukernels = false}>
+#executable_target_system_elf_arm_64_ = #hal.executable.target<"llvm-cpu", "system-elf-arm_64", {cpu = "generic", cpu_features = "+sve", data_layout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-f80:128-n8:16:32:64-S128", native_vector_size = 16 : index, target_triple = "aarch64-none-elf", vscale_range = [1, 16], ukernels = false}>
 #map_rp0 = affine_map<(d0, d1, d2) -> (d0, d1, d2)>
 #map_rp1 = affine_map<(d0, d1, d2) -> (d0, d1)>
 #map_rp_outer = affine_map<()[s0] -> (1024 ceildiv s0)>
@@ -423,14 +452,15 @@ func.func @reduction_pack(%arg0: tensor<384x1024x32xf32>, %arg1: tensor<384x1024
 //      CHECK:   linalg.generic
 // CHECK-SAME:       lowering_config = #[[CONFIG2]]
 //      CHECK:   linalg.pack
+// CHECK-SAME:       inner_tile_alignments = #iree_cpu.inner_tile_alignments<vector_common_parallel = [Unknown, Equal]>
 // CHECK-SAME:       lowering_config = #[[CONFIG3]]
 
 // -----
 
-#executable_target_system_elf_arm_64_ = #hal.executable.target<"llvm-cpu", "system-elf-arm_64", {cpu = "", cpu_features = "+v9a,+sve", data_layout = "e-m:e-i8:8:32-i16:16:32-i64:64-i128:128-n32:64-S128", link_embedded = false, native_vector_size = 16 : index, target_triple = "aarch64-none-linux-android34"}>
+#executable_target_system_elf_arm_64_ = #hal.executable.target<"llvm-cpu", "system-elf-arm_64", {cpu = "", cpu_features = "+v9a,+sve", data_layout = "e-m:e-i8:8:32-i16:16:32-i64:64-i128:128-n32:64-S128", link_embedded = false, native_vector_size = 16 : index, target_triple = "aarch64-none-linux-android34", vscale_range = [1, 16]}>
 #map = affine_map<(d0, d1, d2, d3) -> (d0, d1, d2, d3)>
 #map2 = affine_map<()[s0] -> (10240 ceildiv s0)>
-func.func @mmt4d_generic_unpack_pack(%arg0: tensor<5x4096x16x1xf16>, %arg1: tensor<?x4096x?x1xf16>) -> tensor<5x10240x16x1xf16> attributes {hal.executable.target = #executable_target_system_elf_arm_64_} {
+func.func @mmt4d_generic_unpack_pack(%arg0: tensor<5x4096x16x1xf16>, %arg1: tensor<?x4096x?x1xf16>) -> tensor<5x?x16x?xf16> attributes {hal.executable.target = #executable_target_system_elf_arm_64_} {
   %cst = arith.constant 0.000000e+00 : f16
   %cst_0 = arith.constant 0.000000e+00 : f32
 
@@ -450,9 +480,9 @@ func.func @mmt4d_generic_unpack_pack(%arg0: tensor<5x4096x16x1xf16>, %arg1: tens
   } -> tensor<5x?x16x?xf16>
   %5 = tensor.empty() : tensor<77x10240xf16>
   %unpack = linalg.unpack %4 outer_dims_perm = [0, 1] inner_dims_pos = [0, 1] inner_tiles = [16, %c16_vscale] into %5 : tensor<5x?x16x?xf16> -> tensor<77x10240xf16>
-  %6 = tensor.empty() : tensor<5x10240x16x1xf16>
-  %pack = linalg.pack %unpack padding_value(%cst : f16) outer_dims_perm = [0, 1] inner_dims_pos = [0, 1] inner_tiles = [16, 1] into %6 : tensor<77x10240xf16> -> tensor<5x10240x16x1xf16>
-  return %pack : tensor<5x10240x16x1xf16>
+  %6 = tensor.empty(%n0, %c16_vscale) : tensor<5x?x16x?xf16>
+  %pack = linalg.pack %unpack padding_value(%cst : f16) outer_dims_perm = [0, 1] inner_dims_pos = [0, 1] inner_tiles = [16, %c16_vscale] into %6 : tensor<77x10240xf16> -> tensor<5x?x16x?xf16>
+  return %pack : tensor<5x?x16x?xf16>
 }
 // CHECK-DAG:   #[[$CONFIG0:.+]] = #iree_cpu.lowering_config<vector_common_parallel = [1, 1, 16, [16]]>
 // CHECK-DAG:   #[[$CONFIG1:.+]] = #iree_cpu.lowering_config<distribution = [1, 1, 0, 0, 0, 0], vector_common_parallel = [1, 1, 0, 16, [16], 0], vector_reduction = [0, 0, 1, 0, 0, 1]>
@@ -464,14 +494,71 @@ func.func @mmt4d_generic_unpack_pack(%arg0: tensor<5x4096x16x1xf16>, %arg1: tens
 // CHECK-SAME:      {lowering_config = #[[$CONFIG1]]}
 // CHECK:         linalg.generic
 // CHECK-SAME:      {lowering_config = #[[$CONFIG0]]}
+// The producer unpack carries a precomputed inner-tile alignment hint.
 // CHECK:         linalg.unpack
-// CHECK-SAME:      {lowering_config = #[[$CONFIG2]]}
+// CHECK-SAME:      inner_tile_alignments = #iree_cpu.inner_tile_alignments<vector_common_parallel = [Unknown, Equal]>
+// CHECK-SAME:      lowering_config = #[[$CONFIG2]]
+// The consumer pack also carries a precomputed inner-tile alignment hint and
+// has no lowering config of its own.
 // CHECK:         linalg.pack
-// CHECK-NOT:      lowering_config
+// CHECK-SAME:      inner_tile_alignments = #iree_cpu.inner_tile_alignments<vector_common_parallel = [Unknown, Equal]>
+// CHECK-NOT:       lowering_config
 
 // -----
 
-#executable_target_system_elf_arm_64_ = #hal.executable.target<"llvm-cpu", "system-elf-arm_64", {cpu = "", cpu_features = "+v9a,+sve", data_layout = "e-m:e-i8:8:32-i16:16:32-i64:64-i128:128-n32:64-S128", link_embedded = false, native_vector_size = 16 : index, target_triple = "aarch64-none-linux-android34"}>
+// Same as the above, but the pack operations scalable inner tile does not match it's unpack producer's.
+// The alignment hint is not set.
+
+#executable_target_system_elf_arm_64_ = #hal.executable.target<"llvm-cpu", "system-elf-arm_64", {cpu = "", cpu_features = "+v9a,+sve", data_layout = "e-m:e-i8:8:32-i16:16:32-i64:64-i128:128-n32:64-S128", link_embedded = false, native_vector_size = 16 : index, target_triple = "aarch64-none-linux-android34", vscale_range = [1, 16]}>
+#map = affine_map<(d0, d1, d2, d3) -> (d0, d1, d2, d3)>
+#map2 = affine_map<()[s0] -> (77 ceildiv s0)>
+func.func @mmt4d_generic_unpack_pack_mixed_static_scalable_inner_tiles(%arg0: tensor<5x4096x16x1xf16>, %arg1: tensor<?x4096x?x1xf16>) -> tensor<?x640x16x?xf16> attributes {hal.executable.target = #executable_target_system_elf_arm_64_} {
+  %cst = arith.constant 0.000000e+00 : f16
+  %cst_0 = arith.constant 0.000000e+00 : f32
+
+  %c16 = arith.constant 16 : index
+  %vscale = vector.vscale
+  %c16_vscale = arith.muli %vscale, %c16 : index
+  %n0 = affine.apply #map2()[%c16_vscale]
+
+  %0 = tensor.empty(%n0, %c16_vscale) : tensor<5x?x16x?xf16>
+  %1 = tensor.empty(%n0, %c16_vscale) : tensor<5x?x16x?xf32>
+  %2 = linalg.fill ins(%cst_0 : f32) outs(%1 : tensor<5x?x16x?xf32>) -> tensor<5x?x16x?xf32>
+  %3 = linalg.mmt4d ins(%arg0, %arg1 : tensor<5x4096x16x1xf16>, tensor<?x4096x?x1xf16>) outs(%2 : tensor<5x?x16x?xf32>) -> tensor<5x?x16x?xf32>
+  %4 = linalg.generic {indexing_maps = [#map, #map], iterator_types = ["parallel", "parallel", "parallel", "parallel"]} ins(%3 : tensor<5x?x16x?xf32>) outs(%0 : tensor<5x?x16x?xf16>) {
+  ^bb0(%in: f32, %out: f16):
+    %7 = arith.truncf %in : f32 to f16
+    linalg.yield %7 : f16
+  } -> tensor<5x?x16x?xf16>
+  %5 = tensor.empty() : tensor<77x10240xf16>
+  %unpack = linalg.unpack %4 outer_dims_perm = [0, 1] inner_dims_pos = [0, 1] inner_tiles = [16, %c16_vscale] into %5 : tensor<5x?x16x?xf16> -> tensor<77x10240xf16>
+  %6 = tensor.empty(%n0, %c16_vscale) : tensor<?x640x16x?xf16>
+  %pack = linalg.pack %unpack padding_value(%cst : f16) outer_dims_perm = [0, 1] inner_dims_pos = [1, 0] inner_tiles = [16, %c16_vscale] into %6 : tensor<77x10240xf16> -> tensor<?x640x16x?xf16>
+  return %pack : tensor<?x640x16x?xf16>
+}
+// CHECK-DAG:   #[[$CONFIG0:.+]] = #iree_cpu.lowering_config<vector_common_parallel = [1, 1, 16, [16]]>
+// CHECK-DAG:   #[[$CONFIG1:.+]] = #iree_cpu.lowering_config<distribution = [1, 1, 0, 0, 0, 0], vector_common_parallel = [1, 1, 0, 16, [16], 0], vector_reduction = [0, 0, 1, 0, 0, 1]>
+// CHECK-DAG:   #[[$CONFIG2:.+]] = #iree_cpu.lowering_config<vector_common_parallel = [16, [16]]>
+// CHECK-LABEL: func.func @mmt4d_generic_unpack_pack_mixed_static_scalable_inner_tiles(
+// CHECK:         linalg.fill
+// CHECK-SAME:      {lowering_config = #[[$CONFIG0]]}
+// CHECK:         linalg.mmt4d
+// CHECK-SAME:      {lowering_config = #[[$CONFIG1]]}
+// CHECK:         linalg.generic
+// CHECK-SAME:      {lowering_config = #[[$CONFIG0]]}
+// The producer unpack is a plain scalable unpack, so it carries the hint.
+// CHECK:         linalg.unpack
+// CHECK-SAME:      inner_tile_alignments = #iree_cpu.inner_tile_alignments<vector_common_parallel = [Unknown, Equal]>
+// CHECK-SAME:      lowering_config = #[[$CONFIG2]]
+// The consumer pack's inner dims are transposed: only the static inner tile
+// divides its scalable loop tile. The pack gets no lowering config.
+// CHECK:         linalg.pack
+// CHECK-SAME:      inner_tile_alignments = #iree_cpu.inner_tile_alignments<vector_common_parallel = [Unknown, Multiple]>
+// CHECK-NOT:       lowering_config
+
+// -----
+
+#executable_target_system_elf_arm_64_ = #hal.executable.target<"llvm-cpu", "system-elf-arm_64", {cpu = "", cpu_features = "+v9a,+sve", data_layout = "e-m:e-i8:8:32-i16:16:32-i64:64-i128:128-n32:64-S128", link_embedded = false, native_vector_size = 16 : index, target_triple = "aarch64-none-linux-android34", vscale_range = [1, 16]}>
 func.func @depthwise_conv(%3: tensor<1x57x57x72xf32>, %4: tensor<3x3x72xf32>) -> tensor<1x28x28x72xf32> attributes {hal.executable.target = #executable_target_system_elf_arm_64_} {
   %cst = arith.constant 0.000000e+00 : f32
   %5 = tensor.empty() : tensor<1x28x28x72xf32>
@@ -492,7 +579,7 @@ func.func @depthwise_conv(%3: tensor<1x57x57x72xf32>, %4: tensor<3x3x72xf32>) ->
 // supported), but used to fail to compile when SVE was enabled due to tile
 // sizes leading to large vectors.
 
-#executable_target_embedded_elf_arm_64_ = #hal.executable.target<"llvm-cpu", "embedded-elf-arm_64", {cpu_features = "+sve", data_layout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-f80:128-n8:16:32:64-S128", native_vector_size = 16 : index, target_triple = "aarch64-none-elf"}>
+#executable_target_embedded_elf_arm_64_ = #hal.executable.target<"llvm-cpu", "embedded-elf-arm_64", {cpu_features = "+sve", data_layout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-f80:128-n8:16:32:64-S128", native_vector_size = 16 : index, target_triple = "aarch64-none-elf", vscale_range = [1, 16]}>
 func.func @pooling_nchw_max(%2: tensor<1x64x114x114xf32>) -> tensor<1x64x56x56xf32> attributes {hal.executable.target = #executable_target_embedded_elf_arm_64_} {
   %3 = tensor.empty() : tensor<1x64x56x56xf32>
   %4 = tensor.empty() : tensor<3x3xf32>

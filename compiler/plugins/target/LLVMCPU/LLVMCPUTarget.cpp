@@ -31,8 +31,11 @@
 #include "iree/compiler/PluginAPI/Client.h"
 #include "iree/compiler/Utils/EmbeddedDataDirectory.h"
 #include "iree/compiler/Utils/ModuleUtils.h"
+#include "llvm/ADT/SmallVector.h"
+#include "llvm/ADT/StringRef.h"
 #include "llvm/Bitcode/BitcodeReader.h"
 #include "llvm/Bitcode/BitcodeWriter.h"
+#include "llvm/IR/Attributes.h"
 #include "llvm/IR/GlobalValue.h"
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/Module.h"
@@ -259,10 +262,14 @@ public:
 
   void buildTranslationPassPipeline(IREE::HAL::ExecutableTargetAttr targetAttr,
                                     OpPassManager &passManager) final {
-    bool enableAArch64SME = isAArch64(targetAttr.getConfiguration()) &&
-                            hasSMEFeature(targetAttr.getConfiguration());
-    buildLLVMCPUCodegenPassPipeline(passManager.nest<ModuleOp>(),
-                                    codegenOptions_, enableAArch64SME);
+    DictionaryAttr config = targetAttr.getConfiguration();
+    LLVMCPUPipelineOptions pipelineOpts;
+    pipelineOpts.cpuOpts = codegenOptions_;
+    pipelineOpts.enableAArch64SME = isAArch64(config) && hasSMEFeature(config);
+    pipelineOpts.enableNativeBf16Converts = isRISCV(config) &&
+                                            hasZfbfminFeature(config) &&
+                                            hasZvfbfminFeature(config);
+    buildLLVMCPUCodegenPassPipeline(passManager.nest<ModuleOp>(), pipelineOpts);
     buildCodegenTranslationPostProcessingPassPipeline(passManager);
   }
 
@@ -338,6 +345,12 @@ public:
                                       "dialect to the native llvm::Module";
     }
 
+    // The `vscale_range` function attribute is how the AArch64 (SVE) and
+    // RISC-V (RVV) backends learn the target's vector-length bounds, each
+    // scaling it by its own vscale unit width.
+    std::optional<std::pair<unsigned, unsigned>> vscaleRange =
+        target.getEffectiveVscaleRange();
+
     // Configure the functions in the module. This may override defaults set
     // during the MLIR->LLVM conversion.
     for (auto &func : *llvmModule) {
@@ -354,6 +367,11 @@ public:
       // Our dispatches are all hot - that's kind of the point.
       // This may favor more aggressive optimizations.
       func.addFnAttr("hot");
+
+      if (vscaleRange) {
+        func.addFnAttr(llvm::Attribute::getWithVScaleRangeArgs(
+            context, vscaleRange->first, vscaleRange->second));
+      }
     }
 
     // Build the IREE HAL executable library metadata. The runtime uses this to
@@ -527,6 +545,15 @@ public:
     // Specialize the module to our target machine.
     llvmModule->setDataLayout(targetMachine->createDataLayout());
     llvmModule->setTargetTriple(targetMachine->getTargetTriple());
+    // An explicit "float-abi" module flag wins; only record the target's ABI
+    // when the module does not already carry one.
+    if (target.floatABI != llvm::FloatABI::Default &&
+        !llvmModule->getModuleFlag("float-abi")) {
+      llvmModule->addModuleFlag(
+          llvm::Module::Error, "float-abi",
+          llvm::MDString::get(llvmModule->getContext(),
+                              llvm::FloatABI::getABITypeName(target.floatABI)));
+    }
 
     // Dump just the codegen bitcode before linking and optimization.
     if (!options.dumpIntermediatesPath.empty()) {

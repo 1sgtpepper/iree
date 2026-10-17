@@ -391,7 +391,7 @@ function(iree_select_compiler_opts OPTS)
     _IREE_SELECTS
     ""
     ""
-    "ALL;CLANG;CLANG_GTE_10;CLANG_GTE_12;CLANG_CL;MSVC;GCC;GCC_GTE_13;CLANG_OR_GCC;MSVC_OR_CLANG_CL"
+    "ALL;CLANG;CLANG_GTE_10;CLANG_GTE_12;CLANG_CL;MSVC;GCC;GCC_LT_12;GCC_GTE_13;CLANG_OR_GCC;MSVC_OR_CLANG_CL"
   )
   # OPTS is a variable containing the *name* of the variable being populated, so
   # we need to dereference it twice.
@@ -400,6 +400,9 @@ function(iree_select_compiler_opts OPTS)
   if("${CMAKE_CXX_COMPILER_ID}" STREQUAL "GNU")
     list(APPEND _OPTS "${_IREE_SELECTS_GCC}")
     list(APPEND _OPTS "${_IREE_SELECTS_CLANG_OR_GCC}")
+    if(CMAKE_CXX_COMPILER_VERSION VERSION_LESS 12)
+      list(APPEND _OPTS ${_IREE_SELECTS_GCC_LT_12})
+    endif()
     if(CMAKE_CXX_COMPILER_VERSION VERSION_GREATER_EQUAL 13)
       list(APPEND _OPTS ${_IREE_SELECTS_GCC_GTE_13})
     endif()
@@ -690,15 +693,23 @@ function(iree_compile_flags_for_platform OUT_FLAGS IN_FLAGS)
      NOT IN_FLAGS MATCHES "iree-llvmcpu-target-triple")
     # RV64 Linux crosscompile toolchain can support iree-compile with
     # specific CPU flags. Add the llvm flags to support RV64 RVV codegen if
-    # llvm-target-triple is not specified.
-    list(APPEND _FLAGS ${RISCV64_TEST_DEFAULT_LLVM_FLAGS})
+    # llvm-target-triple is not specified. Skip the default cpu-features flag
+    # when the test already set one, so it cannot replace the test's VLEN.
+    list(APPEND _FLAGS ${RISCV64_TEST_DEFAULT_ABI_FLAGS})
+    if(NOT IN_FLAGS MATCHES "--iree-llvmcpu-target-cpu-features=")
+      list(APPEND _FLAGS ${RISCV64_TEST_DEFAULT_FEAT_FLAGS})
+    endif()
   elseif(IREE_ARCH STREQUAL "riscv_32" AND
          CMAKE_SYSTEM_NAME STREQUAL "Linux" AND
          NOT IN_FLAGS MATCHES "iree-llvmcpu-target-triple")
     # RV32 Linux crosscompile toolchain can support iree-compile with
     # specific CPU flags. Add the llvm flags to support RV32 RVV codegen if
-    # llvm-target-triple is not specified.
-    list(APPEND _FLAGS ${RISCV32_TEST_DEFAULT_LLVM_FLAGS})
+    # llvm-target-triple is not specified. Skip the default cpu-features flag
+    # when the test already set one, so it cannot replace the test's VLEN.
+    list(APPEND _FLAGS ${RISCV32_TEST_DEFAULT_ABI_FLAGS})
+    if(NOT IN_FLAGS MATCHES "--iree-llvmcpu-target-cpu-features=")
+      list(APPEND _FLAGS ${RISCV32_TEST_DEFAULT_FEAT_FLAGS})
+    endif()
   endif()
 
   if(EMSCRIPTEN AND NOT IN_FLAGS MATCHES "iree-llvmcpu-target-triple")

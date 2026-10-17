@@ -38,24 +38,19 @@ func.func @data_tiled_scaled_mma_inner_tiled()
   %7 = iree_tensor_ext.dispatch.tensor.load %2, offsets = [0, 0, 0, 0, 0, 0], sizes = [9, 9, 8, 4, 16, 4], strides = [1, 1, 1, 1, 1, 1] : !iree_tensor_ext.dispatch.tensor<readonly:tensor<9x9x8x4x16x4xf8E8M0FNU>> -> tensor<9x9x8x4x16x4xf8E8M0FNU>
   %8 = iree_tensor_ext.dispatch.tensor.load %3, offsets = [0, 0, 0, 0, 0, 0, 0], sizes = [9, 9, 4, 2, 4, 16, 4], strides = [1, 1, 1, 1, 1, 1, 1] : !iree_tensor_ext.dispatch.tensor<readonly:tensor<9x9x4x2x4x16x4xf8E8M0FNU>> -> tensor<9x9x4x2x4x16x4xf8E8M0FNU>
   %9 = iree_tensor_ext.dispatch.tensor.load %4, offsets = [0, 0, 0, 0, 0, 0, 0, 0], sizes = [9, 9, 4, 8, 2, 4, 16, 4], strides = [1, 1, 1, 1, 1, 1, 1, 1] : !iree_tensor_ext.dispatch.tensor<readwrite:tensor<9x9x4x8x2x4x16x4xf32>> -> tensor<9x9x4x8x2x4x16x4xf32>
-  %10 = iree_codegen.inner_tiled ins(%5, %6, %7, %8) outs(%9) {
-    lowering_config = #config,
-    indexing_maps = [
+  %10 = iree_codegen.inner_tiled ins(%5, %6, %7, %8) outs(%9) <indexing_maps = [
       affine_map<(m, n, k, kb) -> (m, k, kb)>,
       affine_map<(m, n, k, kb) -> (n, k, kb)>,
       affine_map<(m, n, k, kb) -> (m, k)>,
       affine_map<(m, n, k, kb) -> (n, k)>,
-      affine_map<(m, n, k, kb) -> (m, n)>],
-    iterator_types = [
+      affine_map<(m, n, k, kb) -> (m, n)>], iterator_types = [
       #linalg.iterator_type<parallel>,
       #linalg.iterator_type<parallel>,
       #linalg.iterator_type<reduction>,
-      #linalg.iterator_type<reduction>],
-    kind = #iree_gpu.data_tiled_scaled_mma_layout<
+      #linalg.iterator_type<reduction>], kind = #iree_gpu.data_tiled_scaled_mma_layout<
       intrinsic = MFMA_SCALE_F32_16x16x128_B32,
       lhs_elem_type = f4E2M1FN, rhs_elem_type = f4E2M1FN, acc_elem_type = f32,
-      intrinsics_m = 8, intrinsics_n = 2, subgroups_n = 4, intrinsics_k = 4, operands_interleaving_intrinsics_k = [2, 3]>,
-    semantics = #iree_gpu.mma_semantics<distributed = false, opaque = false>}
+      intrinsics_m = 8, intrinsics_n = 2, subgroups_n = 4, intrinsics_k = 4, operands_interleaving_intrinsics_k = [2, 3]>, semantics = #iree_gpu.mma_semantics<distributed = false, opaque = false>> {lowering_config = #config}
     : tensor<9x9x1x8x4x4x16x32xf4E2M1FN>, tensor<9x9x1x4x2x4x4x16x32xf4E2M1FN>, tensor<9x9x8x4x16x4xf8E8M0FNU>, tensor<9x9x4x2x4x16x4xf8E8M0FNU> into tensor<9x9x4x8x2x4x16x4xf32>
   iree_tensor_ext.dispatch.tensor.store %10, %4, offsets = [0, 0, 0, 0, 0, 0, 0, 0], sizes = [9, 9, 4, 8, 2, 4, 16, 4], strides = [1, 1, 1, 1, 1, 1, 1, 1] : tensor<9x9x4x8x2x4x16x4xf32> -> !iree_tensor_ext.dispatch.tensor<readwrite:tensor<9x9x4x8x2x4x16x4xf32>>
   return
@@ -109,10 +104,10 @@ func.func @data_tiled_scaled_mma_inner_tiled()
 // CHECK-DAG:    %[[B_EXTRACT11:.+]] = vector.extract %[[B_READ]][1, 1, 0, 0] : vector<32xf4E2M1FN> from vector<2x4x1x1x32xf4E2M1FN>
 // CHECK-DAG:    %[[B_EXTRACT12:.+]] = vector.extract %[[B_READ]][1, 2, 0, 0] : vector<32xf4E2M1FN> from vector<2x4x1x1x32xf4E2M1FN>
 // CHECK-DAG:    %[[B_EXTRACT13:.+]] = vector.extract %[[B_READ]][1, 3, 0, 0] : vector<32xf4E2M1FN> from vector<2x4x1x1x32xf4E2M1FN>
-// CHECK-DAG:    %[[A_SCALE_VECTOR0:.+]] = vector.extract_strided_slice {{.*}} {offsets = [0], sizes = [4], strides = [1]} : vector<32xf8E8M0FNU> to vector<4xf8E8M0FNU>
-// CHECK-DAG:    %[[A_SCALE_VECTOR7:.+]] = vector.extract_strided_slice {{.*}} {offsets = [28], sizes = [4], strides = [1]} : vector<32xf8E8M0FNU> to vector<4xf8E8M0FNU>
-// CHECK-DAG:    %[[B_SCALE_VECTOR0:.+]] = vector.extract_strided_slice {{.*}} {offsets = [0], sizes = [4], strides = [1]} : vector<8xf8E8M0FNU> to vector<4xf8E8M0FNU>
-// CHECK-DAG:    %[[B_SCALE_VECTOR1:.+]] = vector.extract_strided_slice {{.*}} {offsets = [4], sizes = [4], strides = [1]} : vector<8xf8E8M0FNU> to vector<4xf8E8M0FNU>
+// CHECK-DAG:    %[[A_SCALE_VECTOR0:.+]] = vector.extract_strided_slice {{.*}} offsets = [0], sizes = [4], strides = [1] : vector<32xf8E8M0FNU> to vector<4xf8E8M0FNU>
+// CHECK-DAG:    %[[A_SCALE_VECTOR7:.+]] = vector.extract_strided_slice {{.*}} offsets = [28], sizes = [4], strides = [1] : vector<32xf8E8M0FNU> to vector<4xf8E8M0FNU>
+// CHECK-DAG:    %[[B_SCALE_VECTOR0:.+]] = vector.extract_strided_slice {{.*}} offsets = [0], sizes = [4], strides = [1] : vector<8xf8E8M0FNU> to vector<4xf8E8M0FNU>
+// CHECK-DAG:    %[[B_SCALE_VECTOR1:.+]] = vector.extract_strided_slice {{.*}} offsets = [4], sizes = [4], strides = [1] : vector<8xf8E8M0FNU> to vector<4xf8E8M0FNU>
 // CHECK-DAG:    %[[C_00_1:.+]] = amdgpu.scaled_mfma 16x16x128 (%[[A_SCALE_VECTOR0]][0] * %[[A_EXTRACT00]]) * (%[[B_SCALE_VECTOR0]][0] * %[[B_EXTRACT00]]) + %arg[[#ITER_BASE]]
 // CHECK-DAG:    %[[C_00_2:.+]] = amdgpu.scaled_mfma 16x16x128 (%[[A_SCALE_VECTOR0]][1] * %[[A_EXTRACT01]]) * (%[[B_SCALE_VECTOR0]][1] * %[[B_EXTRACT01]]) + %[[C_00_1]]
 // CHECK-DAG:    %[[C_00_3:.+]] = amdgpu.scaled_mfma 16x16x128 (%[[A_SCALE_VECTOR0]][2] * %[[A_EXTRACT02]]) * (%[[B_SCALE_VECTOR0]][2] * %[[B_EXTRACT02]]) + %[[C_00_2]]
@@ -130,10 +125,10 @@ func.func @data_tiled_scaled_mma_inner_tiled()
 // CHECK-DAG:    %[[C_71_3:.+]] = amdgpu.scaled_mfma 16x16x128 (%[[A_SCALE_VECTOR7]][2] * %[[A_EXTRACT72]]) * (%[[B_SCALE_VECTOR1]][2] * %[[B_EXTRACT12]]) + %[[C_71_2]]
 // CHECK-DAG:    %[[C_71_4:.+]] = amdgpu.scaled_mfma 16x16x128 (%[[A_SCALE_VECTOR7]][3] * %[[A_EXTRACT73]]) * (%[[B_SCALE_VECTOR1]][3] * %[[B_EXTRACT13]]) + %[[C_71_3]]
 // CHECK:        scf.yield
-// CHECK:      vector.insert_strided_slice %[[LOOP]]#0, %{{.+}} {offsets = [0, 0, 0, 0, 0]{{.*}}} : vector<4xf32> into vector<8x2x1x1x4xf32>
-// CHECK:      vector.insert_strided_slice %[[LOOP]]#1, %{{.+}} {offsets = [0, 1, 0, 0, 0]{{.*}}} : vector<4xf32> into vector<8x2x1x1x4xf32>
-// CHECK:      vector.insert_strided_slice %[[LOOP]]#14, %{{.+}} {offsets = [7, 0, 0, 0, 0]{{.*}}} : vector<4xf32> into vector<8x2x1x1x4xf32>
-// CHECK:      vector.insert_strided_slice %[[LOOP]]#15, %{{.+}} {offsets = [7, 1, 0, 0, 0]{{.*}}} : vector<4xf32> into vector<8x2x1x1x4xf32>
+// CHECK:      vector.insert_strided_slice %[[LOOP]]#0, %{{.+}} offsets = [0, 0, 0, 0, 0]{{.*}} : vector<4xf32> into vector<8x2x1x1x4xf32>
+// CHECK:      vector.insert_strided_slice %[[LOOP]]#1, %{{.+}} offsets = [0, 1, 0, 0, 0]{{.*}} : vector<4xf32> into vector<8x2x1x1x4xf32>
+// CHECK:      vector.insert_strided_slice %[[LOOP]]#14, %{{.+}} offsets = [7, 0, 0, 0, 0]{{.*}} : vector<4xf32> into vector<8x2x1x1x4xf32>
+// CHECK:      vector.insert_strided_slice %[[LOOP]]#15, %{{.+}} offsets = [7, 1, 0, 0, 0]{{.*}} : vector<4xf32> into vector<8x2x1x1x4xf32>
 // CHECK:      vector.transfer_read %[[BUFFER_C]]
 // CHECK:      arith.addf
 // CHECK:      vector.transfer_write

@@ -46,6 +46,22 @@ void buildStableHLOInputConversionPassPipelineImpl(
   // If the input is StableHLO, this pass is considered a NOP.
   passManager.addPass(stablehlo::createCheckVHLOStableHloMixUsage());
   ::mlir::stablehlo::createStablehloDeserializePipeline(passManager);
+  // Composite ops carry a symbol reference to a function implementing their
+  // decomposition. Replace them with a call to that function so that the
+  // conversions below only have to handle the decomposed form; the inliner
+  // later in this pipeline folds the call away.
+  //
+  // A composite that should be handled as a unit instead of being decomposed
+  // (for example one that maps onto a dedicated lowering) can be excluded by
+  // adding its name to the exception list below, e.g. {"my_namespace.my_op"}.
+  passManager.addNestedPass<func::FuncOp>(
+      ::mlir::stablehlo::createStablehloLegalizeCompositeToCallPass(
+          ::mlir::stablehlo::StablehloLegalizeCompositeToCallPassOptions{
+              /*exceptListOption=*/{}}));
+  passManager.addNestedPass<func::FuncOp>(
+      ::mlir::stablehlo::createStablehloLegalizeQuantToMathPass());
+  passManager.addNestedPass<func::FuncOp>(
+      ::mlir::stablehlo::createChloLegalizeToStablehloPass());
   passManager.addNestedPass<func::FuncOp>(mlir::createCanonicalizerPass());
   passManager.addNestedPass<func::FuncOp>(createStableHLOCanonicalize());
   passManager.addNestedPass<func::FuncOp>(mlir::createCSEPass());
@@ -57,6 +73,10 @@ void buildStableHLOInputConversionPassPipelineImpl(
   if (detuple) {
     passManager.addPass(createFlattenTuplesInCFG());
   }
+
+  // Runs after the tuple flatteners, which unpack a bounded tensor out of a
+  // tuple argument.
+  passManager.addNestedPass<func::FuncOp>(createLowerBounds());
 
   passManager.addPass(createStableHLOToStableHLOPreprocessing());
   passManager.addNestedPass<func::FuncOp>(createStableHLOCanonicalize());
@@ -73,6 +93,11 @@ void buildStableHLOInputConversionPassPipelineImpl(
   // We also don't handle calls well on the old codepath; until we remove the
   // use of the CFG we can continue inlining.
   passManager.addPass(mlir::createInlinerPass());
+
+  // A shape operand that arrives through a call is constant only once the
+  // inliner has run.
+  passManager.addNestedPass<func::FuncOp>(
+      ::mlir::stablehlo::createStablehloCanonicalizeDynamismPass());
 
   // Perform initial cleanup. createLegalizeInputTypes could rewrite types. In
   // this context, some operations could be folded away.

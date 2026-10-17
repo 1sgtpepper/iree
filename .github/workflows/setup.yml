@@ -13,6 +13,9 @@ name: Setup
 on:
   workflow_call:
     outputs:
+      ci-deferred:
+        description: Whether CI is deferred for an upper stack PR.
+        value: ${{ jobs.setup.outputs.ci-deferred }}
       enabled-jobs:
         description: |
           Which jobs should run.
@@ -37,12 +40,13 @@ jobs:
       # parent will be the tip of main.
       BASE_REF: HEAD^
     outputs:
+      ci-deferred: ${{ steps.configure.outputs.ci-deferred }}
       enabled-jobs: ${{ steps.configure.outputs.enabled-jobs }}
       is-pr: ${{ steps.configure.outputs.is-pr }}
       write-caches: ${{ steps.configure.outputs.write-caches }}
     steps:
       - name: "Checking out repository"
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           # We need the parent commit to do a diff
           fetch-depth: 2

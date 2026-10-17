@@ -8,6 +8,7 @@
 
 #include "compiler/plugins/target/LLVMCPU/ResolveCPUAndCPUFeatures.h"
 #include "iree/compiler/Codegen/LLVMCPU/Utils.h"
+#include "iree/compiler/Codegen/Utils/CPUUtils.h"
 #include "llvm/ADT/APFloat.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/Analysis/TargetTransformInfo.h"
@@ -15,10 +16,12 @@
 #include "llvm/MC/TargetRegistry.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/ErrorHandling.h"
+#include "llvm/Support/MathExtras.h"
 #include "llvm/Support/TargetSelect.h"
 #include "llvm/Target/TargetMachine.h"
 #include "llvm/Target/TargetOptions.h"
 #include "llvm/TargetParser/Host.h"
+#include "llvm/TargetParser/RISCVTargetParser.h"
 #include "llvm/TargetParser/Triple.h"
 #include "mlir/IR/Builders.h"
 
@@ -37,7 +40,7 @@ LLVMTarget::LLVMTarget() {
   // TODO(benvanik): add an option for this.
   optimizerOptLevel = llvm::OptimizationLevel::O2;
   codeGenOptLevel = llvm::CodeGenOptLevel::Aggressive;
-  llvmTargetOptions.FloatABIType = DEFAULT_FLOAT_ABI;
+  floatABI = DEFAULT_FLOAT_ABI;
 
   // Force `-ffunction-sections` so we can strip unused code.
   llvmTargetOptions.FunctionSections = true;
@@ -91,12 +94,38 @@ std::optional<LLVMTarget> LLVMTarget::createForHost() {
   return target;
 }
 
+std::optional<std::pair<unsigned, unsigned>>
+LLVMTarget::getEffectiveVscaleRange() const {
+  if (vscaleRangeMax == DEFAULT_VSCALE_RANGE) {
+    return std::nullopt;
+  }
+  auto vscaleMin = static_cast<unsigned>(vscaleRangeMin);
+  auto vscaleMax = static_cast<unsigned>(vscaleRangeMax);
+  SmallVector<StringRef> features;
+  StringRef(cpuFeatures)
+      .split(features, ',', /*MaxSplit=*/-1, /*KeepEmpty=*/false);
+  for (StringRef feature : features) {
+    if (feature.consume_front("+zvl") && feature.consume_back("b")) {
+      unsigned bits = 0;
+      if (!feature.getAsInteger(10, bits) &&
+          bits >= llvm::RISCV::RVVBitsPerBlock) {
+        vscaleMin = std::max(vscaleMin, bits / llvm::RISCV::RVVBitsPerBlock);
+      }
+    } else if (feature == "+v") {
+      // `+v` implies `+zvl128b`, i.e. a minimum RVV VLEN of 128 bits.
+      vscaleMin = std::max(vscaleMin, 128u / llvm::RISCV::RVVBitsPerBlock);
+    }
+  }
+  return std::make_pair(vscaleMin, vscaleMax);
+}
+
 void LLVMTarget::print(llvm::raw_ostream &os) const {
   os << "LLVMTarget{\n"
      << "  triple=" << triple << ", cpu=" << cpu
      << ", cpuFeatures=" << cpuFeatures << "\n"
      << "  dataLayout=" << dataLayout << "\n"
      << "  vectorWidthInBytes=" << vectorWidthInBytes << "\n"
+     << "  vscaleRange=[" << vscaleRangeMin << ", " << vscaleRangeMax << "]\n"
      << "  linkEmbedded=" << linkEmbedded << "\n"
      << "  debugSymbols=" << debugSymbols << "\n"
      << "  sanitizer=" << static_cast<int>(sanitizerKind) << "\n"
@@ -111,8 +140,7 @@ void LLVMTarget::print(llvm::raw_ostream &os) const {
      << "    SLPVectorization=" << pipelineTuningOptions.SLPVectorization
      << "\n"
      << "  }, llvmTargetOptions={\n"
-     << "    FloatABIType=" << static_cast<int>(llvmTargetOptions.FloatABIType)
-     << "\n"
+     << "    FloatABI=" << static_cast<int>(floatABI) << "\n"
      << "  }\n"
      << "  ukernels=" << ukernels << "\n"
      << "  linkUkernelBitcode=" << linkUkernelBitcode << "\n"
@@ -138,6 +166,9 @@ void LLVMTarget::storeToConfigAttrs(MLIRContext *context,
   }
   if (vectorWidthInBytes != DEFAULT_VECTOR_WIDTH_IN_BYTES) {
     addConfigNativeVectorSize(context, vectorWidthInBytes, config);
+  }
+  if (vscaleRangeMax != DEFAULT_VSCALE_RANGE) {
+    addConfigVscaleRange(context, vscaleRangeMin, vscaleRangeMax, config);
   }
   addConfigMaxStackAllocationSize(context, maxStackAllocSizeInBytes, config);
   if (linkEmbedded != DEFAULT_LINK_EMBEDDED) {
@@ -180,8 +211,8 @@ void LLVMTarget::storeToConfigAttrs(MLIRContext *context,
   if (!llvmTargetOptions.MCOptions.ABIName.empty()) {
     addString("target_abi", llvmTargetOptions.MCOptions.ABIName);
   }
-  if (llvmTargetOptions.FloatABIType != DEFAULT_FLOAT_ABI) {
-    switch (llvmTargetOptions.FloatABIType) {
+  if (floatABI != DEFAULT_FLOAT_ABI) {
+    switch (floatABI) {
     case llvm::FloatABI::Default:
       addString("float_abi", "default");
       break;
@@ -284,6 +315,31 @@ LLVMTarget::loadFromConfigAttr(Location loc, DictionaryAttr config,
   target.dataLayout = getConfigDataLayout(config).value_or(DEFAULT_DATA_LAYOUT);
   target.vectorWidthInBytes =
       getConfigNativeVectorSize(config).value_or(DEFAULT_VECTOR_WIDTH_IN_BYTES);
+  if (auto vscaleRange = getConfigVscaleRange(config)) {
+    target.vscaleRangeMin = vscaleRange->first;
+    target.vscaleRangeMax = vscaleRange->second;
+  }
+  // The range reaches LLVM as a `vscale_range` function attribute, which the
+  // backends assert on and the IR verifier rejects if it is not a valid range
+  // of powers of two.
+  if (auto vscaleRange = target.getEffectiveVscaleRange()) {
+    auto [vscaleMin, vscaleMax] = *vscaleRange;
+    if (vscaleMin > vscaleMax) {
+      InFlightDiagnostic diag = emitError(loc)
+                                << "invalid vscale range [" << vscaleMin << ", "
+                                << vscaleMax << "]: minimum exceeds maximum";
+      if (vscaleMin > static_cast<unsigned>(target.vscaleRangeMin)) {
+        diag << "; the minimum is raised to " << vscaleMin
+             << " by the target's RVV VLEN features";
+      }
+      return {};
+    }
+    if (!llvm::isPowerOf2_32(vscaleMin) || !llvm::isPowerOf2_32(vscaleMax)) {
+      emitError(loc) << "'vscale_range' [" << vscaleMin << ", " << vscaleMax
+                     << "] must consist of powers of two";
+      return {};
+    }
+  }
 
   target.debugSymbols = getBool("debug_symbols", DEFAULT_DEBUG_SYMBOLS);
   target.linkStatic = getBool("link_static", DEFAULT_LINK_STATIC);
@@ -318,11 +374,11 @@ LLVMTarget::loadFromConfigAttr(Location loc, DictionaryAttr config,
   auto floatAbi = getOptionalString("float_abi");
   if (floatAbi) {
     if (floatAbi == "default") {
-      target.llvmTargetOptions.FloatABIType = llvm::FloatABI::Default;
+      target.floatABI = llvm::FloatABI::Default;
     } else if (floatAbi == "soft") {
-      target.llvmTargetOptions.FloatABIType = llvm::FloatABI::Default;
+      target.floatABI = llvm::FloatABI::Default;
     } else if (floatAbi == "hard") {
-      target.llvmTargetOptions.FloatABIType = llvm::FloatABI::Default;
+      target.floatABI = llvm::FloatABI::Default;
     } else {
       emitError(loc) << "executable config unexpected value for 'float_abi'";
       return {};
@@ -596,6 +652,11 @@ void LLVMCPUTargetCLOptions::bindOptions(OptionsBinder &binder) {
                        targetVectorWidthInBytes, llvm::cl::cat(category),
                        llvm::cl::desc("Overrides the native vector register "
                                       "width (in bytes) of the target."));
+  binder.opt<std::string>(
+      "iree-llvmcpu-vscale-range", targetVscaleRange, llvm::cl::cat(category),
+      llvm::cl::desc(
+          "Vscale range for scalable vectorization, in vscale units, as `max` "
+          "or `min,max` (e.g. `16`, `1,16`), where 1 <= min <= max."));
   binder.opt<llvm::cl::PowerOf2ByteSize>(
       "iree-llvmcpu-stack-allocation-limit", targetMaxStackAllocSizeInBytes,
       llvm::cl::cat(category),
@@ -670,9 +731,34 @@ LLVMTargetOptions LLVMCPUTargetCLOptions::getTargetOptions() {
   target.pipelineTuningOptions.SLPVectorization = llvmSLPVectorization;
   target.sanitizerKind = sanitizerKind;
   target.llvmTargetOptions.MCOptions.ABIName = targetABI;
-  target.llvmTargetOptions.FloatABIType = targetFloatABI;
+  target.floatABI = targetFloatABI;
   target.dataLayout = targetDataLayout;
   target.vectorWidthInBytes = targetVectorWidthInBytes;
+  // Parse the vscale range spec, accepted as `max` (min defaults to 1) or
+  // `min,max`. Both ends are vscale multipliers, so they must be positive and
+  // ordered.
+  if (!targetVscaleRange.empty()) {
+    SmallVector<StringRef> fields;
+    StringRef(targetVscaleRange).split(fields, ',');
+    auto parsePositive = [](StringRef field, int64_t &value) {
+      field = field.trim();
+      return !field.empty() && !field.getAsInteger(10, value) && value >= 1;
+    };
+    int64_t min = 1, max = 0;
+    bool valid = fields.size() == 1
+                     ? parsePositive(fields[0], max)
+                     : fields.size() == 2 && parsePositive(fields[0], min) &&
+                           parsePositive(fields[1], max);
+    if (!valid || min > max) {
+      // TODO(egebeysel): promote this to an error.
+      llvm::errs() << "invalid --iree-llvmcpu-vscale-range: '"
+                   << targetVscaleRange
+                   << "'; expected `max` or `min,max` with 1 <= min <= max\n";
+    } else {
+      target.vscaleRangeMin = min;
+      target.vscaleRangeMax = max;
+    }
+  }
   target.maxStackAllocSizeInBytes = targetMaxStackAllocSizeInBytes.value;
   target.ukernels = enableUkernels;
   target.llvmUkernels = enableLlvmUkernels;

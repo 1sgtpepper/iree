@@ -2972,6 +2972,13 @@ LogicalResult AsyncTransferOp::verify() {
 }
 
 IREE::Stream::AffinityAttr AsyncTransferOp::getAffinityAttr() {
+  if (auto executionAffinityAttr = getExecutionAffinityAttr()) {
+    return executionAffinityAttr;
+  }
+  return getDefaultExecutionAffinityAttr();
+}
+
+IREE::Stream::AffinityAttr AsyncTransferOp::getDefaultExecutionAffinityAttr() {
   auto sourceType = cast<IREE::Stream::ResourceType>(getSource().getType());
   auto resultType = cast<IREE::Stream::ResourceType>(getResult().getType());
   if (sourceType.getLifetime() == IREE::Stream::Lifetime::Staging &&
@@ -2993,37 +3000,10 @@ IREE::Stream::AffinityAttr AsyncTransferOp::getAffinityAttr() {
 }
 
 void AsyncTransferOp::setAffinityAttr(IREE::Stream::AffinityAttr value) {
-  auto sourceType = cast<IREE::Stream::ResourceType>(getSource().getType());
-  auto resultType = cast<IREE::Stream::ResourceType>(getResult().getType());
-  if (sourceType.getLifetime() == IREE::Stream::Lifetime::Staging &&
-      resultType.getLifetime() == IREE::Stream::Lifetime::Staging) {
-    // TODO(multi-device): figure out how to model staging->staging transfers.
-    if (value) {
-      setSourceAffinityAttr(value);
-    } else {
-      removeSourceAffinityAttr();
-    }
-  } else if (sourceType.getLifetime() == IREE::Stream::Lifetime::Staging) {
-    // If source is staging then the op should execute on the consumer.
-    if (value) {
-      setTargetAffinityAttr(value);
-    } else {
-      removeTargetAffinityAttr();
-    }
-  } else if (resultType.getLifetime() == IREE::Stream::Lifetime::Staging) {
-    // If result is staging then the op should execute on the producer.
-    if (value) {
-      setSourceAffinityAttr(value);
-    } else {
-      removeSourceAffinityAttr();
-    }
+  if (value) {
+    setExecutionAffinityAttr(value);
   } else {
-    // Default to result affinity.
-    if (value) {
-      setTargetAffinityAttr(value);
-    } else {
-      removeTargetAffinityAttr();
-    }
+    removeExecutionAffinityAttr();
   }
 }
 
@@ -3034,6 +3014,24 @@ IREE::Stream::AffinityAttr AsyncTransferOp::getResultAffinityAttr() {
 void AsyncTransferOp::removeAffinityAttrs() {
   removeSourceAffinityAttr();
   removeTargetAffinityAttr();
+  removeExecutionAffinityAttr();
+}
+
+AsyncTransferOp AsyncTransferOp::create(OpBuilder &builder, Location location,
+                                        Type type, Value source,
+                                        Value sourceSize, Value resultSize,
+                                        AffinityAttr sourceAffinity,
+                                        AffinityAttr targetAffinity) {
+  return create(builder, location, type, source, sourceSize, resultSize,
+                sourceAffinity, targetAffinity, nullptr);
+}
+
+void AsyncTransferOp::build(OpBuilder &builder, OperationState &state,
+                            Type type, Value source, Value sourceSize,
+                            Value resultSize, AffinityAttr sourceAffinity,
+                            AffinityAttr targetAffinity) {
+  build(builder, state, type, source, sourceSize, resultSize, sourceAffinity,
+        targetAffinity, nullptr);
 }
 
 void AsyncTransferOp::getAsyncAccessRanges(
@@ -3123,9 +3121,7 @@ void AsyncDispatchOp::build(OpBuilder &builder, OperationState &state,
                             ArrayRef<int64_t> tiedOperands,
                             AffinityAttr affinityAttr) {
   StringRef executableOpSymName =
-      exportOp->getParentOp()
-          ->getAttrOfType<StringAttr>(SymbolTable::getSymbolAttrName())
-          .getValue();
+      cast<ExecutableOp>(exportOp->getParentOp()).getName();
   auto entryPoint =
       SymbolRefAttr::get(builder.getContext(), executableOpSymName,
                          {SymbolRefAttr::get(exportOp)});
@@ -3301,9 +3297,9 @@ void AsyncFuncOp::build(OpBuilder &builder, OperationState &state,
                         ArrayAttr tiedOperands,
                         ArrayRef<DictionaryAttr> argAttrs,
                         ArrayRef<DictionaryAttr> resAttrs) {
-  state.addAttribute(SymbolTable::getSymbolAttrName(),
+  state.addAttribute(getSymNameAttrName(state.name),
                      builder.getStringAttr(name));
-  state.addAttribute(SymbolTable::getVisibilityAttrName(),
+  state.addAttribute(getSymVisibilityAttrName(state.name),
                      builder.getStringAttr("private"));
   state.addAttribute("function_type", TypeAttr::get(type));
   if (tiedOperands) {
@@ -4341,9 +4337,9 @@ CmdFuncOp CmdFuncOp::create(Location location, StringRef name,
 void CmdFuncOp::build(OpBuilder &builder, OperationState &state, StringRef name,
                       FunctionType type, ArrayRef<DictionaryAttr> argAttrs,
                       ArrayRef<DictionaryAttr> resAttrs) {
-  state.addAttribute(SymbolTable::getSymbolAttrName(),
+  state.addAttribute(getSymNameAttrName(state.name),
                      builder.getStringAttr(name));
-  state.addAttribute(SymbolTable::getVisibilityAttrName(),
+  state.addAttribute(getSymVisibilityAttrName(state.name),
                      builder.getStringAttr("private"));
   state.addAttribute("function_type", TypeAttr::get(type));
   state.addRegion();
@@ -5128,7 +5124,7 @@ void ChannelCountOp::getAsmResultNames(
 void ExecutableOp::build(OpBuilder &builder, OperationState &state,
                          StringRef sym_name) {
   ensureTerminator(*state.addRegion(), builder, state.location);
-  state.addAttribute(mlir::SymbolTable::getSymbolAttrName(),
+  state.addAttribute(getSymNameAttrName(state.name),
                      builder.getStringAttr(sym_name));
 }
 

@@ -90,7 +90,7 @@ func.func @attention_f16(%query: tensor<192x1024x64xf16>,
   %scale = arith.constant 1.0 : f16
 
   %out = iree_linalg_ext.attention
-        { indexing_maps = [#mapQ, #mapK, #mapV, #mapS, #mapO] }
+        < indexing_maps = [#mapQ, #mapK, #mapV, #mapS, #mapO] >
         ins(%query, %key, %value, %scale : tensor<192x1024x64xf16>, tensor<192x1024x64xf16>, tensor<192x1024x64xf16>, f16)
         outs(%output : tensor<192x1024x64xf32>) {
                       ^bb0(%score: f32):
@@ -107,12 +107,7 @@ func.func @attention_f16(%query: tensor<192x1024x64xf16>,
 // CHECK: linalg.generic
 // CHECK:   arith.mulf
 // S = Q @ K
-// CHECK: linalg.generic
-// CHECK:   arith.extf
-// CHECK:   arith.extf
-// CHECK:   arith.mulf
-// CHECK:   arith.addf
-// CHECK:   linalg.yield
+// CHECK: linalg.batch_matmul
 // max = rowMax(S)
 // CHECK: linalg.generic
 // CHECK-NOT: arith.extf
@@ -139,13 +134,8 @@ func.func @attention_f16(%query: tensor<192x1024x64xf16>,
 // CHECK-NOT: arith.extf
 // CHECK:   arith.truncf
 // CHECK:   linalg.yield
-// newAcc = P @ V
-// CHECK: linalg.generic
-// CHECK:   arith.extf
-// CHECK:   arith.extf
-// CHECK:   arith.mulf
-// CHECK:   arith.addf
-// CHECK:   linalg.yield
+// result = P @ V
+// CHECK: linalg.batch_matmul
 
 // -----
 
@@ -175,7 +165,7 @@ func.func @online_attention_f16(%query: tensor<192x1024x64xf16>,
   %scale = arith.constant 1.0 : f16
 
   %out:3 = iree_linalg_ext.online_attention
-        { indexing_maps = [#mapQ, #mapK, #mapV, #mapS, #mapO, #mapR, #mapR] }
+        < indexing_maps = [#mapQ, #mapK, #mapV, #mapS, #mapO, #mapR, #mapR] >
         ins(%query, %key, %value, %scale : tensor<192x1024x64xf16>, tensor<192x1024x64xf16>, tensor<192x1024x64xf16>, f16)
         outs(%output, %max, %sum : tensor<192x1024x64xf32>, tensor<192x1024xf32>, tensor<192x1024xf32>) {
                       ^bb0(%score: f32):
@@ -268,7 +258,7 @@ func.func @online_attention_f8(%query: tensor<192x1024x64xf8E4M3FNUZ>,
   %scale = arith.constant 1.0 : f32
 
   %out:3 = iree_linalg_ext.online_attention
-        { indexing_maps = [#mapQ, #mapK, #mapV, #mapS, #mapO, #mapR, #mapR] }
+        < indexing_maps = [#mapQ, #mapK, #mapV, #mapS, #mapO, #mapR, #mapR] >
         ins(%query, %key, %value, %scale : tensor<192x1024x64xf8E4M3FNUZ>, tensor<192x1024x64xf8E4M3FNUZ>, tensor<192x1024x64xf8E4M3FNUZ>, f32)
         outs(%output, %max, %sum : tensor<192x1024x64xf32>, tensor<192x1024xf32>, tensor<192x1024xf32>) {
                       ^bb0(%score: f32):
@@ -372,7 +362,7 @@ func.func @online_attention_f8_masked(%query: tensor<192x1024x64xf8E4M3FNUZ>,
   %scale = arith.constant 1.0 : f16
 
   %out:3 = iree_linalg_ext.online_attention
-        { indexing_maps = [#mapQ, #mapK, #mapV, #mapS, #mapM, #mapO, #mapR, #mapR] }
+        < indexing_maps = [#mapQ, #mapK, #mapV, #mapS, #mapM, #mapO, #mapR, #mapR] >
         ins(%query, %key, %value, %scale, %mask : tensor<192x1024x64xf8E4M3FNUZ>, tensor<192x1024x64xf8E4M3FNUZ>, tensor<192x1024x64xf8E4M3FNUZ>, f16, tensor<192x1024x1024xf8E4M3FNUZ>)
         outs(%output, %max, %sum : tensor<192x1024x64xf32>, tensor<192x1024xf32>, tensor<192x1024xf32>) {
                       ^bb0(%score: f32):
@@ -446,7 +436,7 @@ func.func @online_attention_f16_noexp2(%query: tensor<192x1024x64xf16>,
   %scale = arith.constant 1.0 : f16
 
   %out:3 = iree_linalg_ext.online_attention
-        {decomposition_config = {use_exp2=false}, indexing_maps = [#mapQ, #mapK, #mapV, #mapS, #mapO, #mapR, #mapR] }
+        <decomposition_config = {use_exp2=false}, indexing_maps = [#mapQ, #mapK, #mapV, #mapS, #mapO, #mapR, #mapR] >
         ins(%query, %key, %value, %scale : tensor<192x1024x64xf16>, tensor<192x1024x64xf16>, tensor<192x1024x64xf16>, f16)
         outs(%output, %max, %sum : tensor<192x1024x64xf32>, tensor<192x1024xf32>, tensor<192x1024xf32>) {
                       ^bb0(%score: f32):

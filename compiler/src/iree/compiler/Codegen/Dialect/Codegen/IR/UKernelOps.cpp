@@ -224,7 +224,7 @@ void UKernelGenericOp::build(OpBuilder &builder, OperationState &result,
       });
   auto stridedDimsArrayAttr =
       ArrayAttr::get(builder.getContext(), stridedDimsAttrs);
-  build(builder, result, outputs.getTypes(), uKernelFnName, inputs, outputs,
+  build(builder, result, resultTypes, uKernelFnName, inputs, outputs,
         otherOperands, fnDefAttrs, stridedDimsArrayAttr);
 }
 
@@ -336,8 +336,10 @@ struct UKernelOpsBufferizationInterface
       nonTensorResultValues.push_back(result);
     }
 
-    auto bufferOp = OpTy::create(rewriter, op->getLoc(), nonTensorResultTypes,
-                                 bufferOpOperands, op->getAttrs());
+    auto bufferOp =
+        OpTy::create(rewriter, op->getLoc(), nonTensorResultTypes,
+                     bufferOpOperands, cast<OpTy>(op).getProperties(),
+                     op->getDiscardableAttrDictionary().getValue());
     SmallVector<Value> bufferizedResults =
         cast<DestinationStyleOpInterface>(bufferOp.getOperation())
             .getDpsInits();

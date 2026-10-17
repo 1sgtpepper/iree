@@ -29,6 +29,18 @@ def ConvertTorchUnstructuredToLinalgExtPass :
   let summary = "Convert unstructured Torch ops to LinalgExt ops";
 }
 
+def ConvertTorchQuantizationToLinalgExtPass :
+    InterfacePass<"torch-iree-torch-quantization-to-linalg-ext", "mlir::FunctionOpInterface"> {
+  let summary = "Convert PT2E quantization operations to LinalgExt";
+  let description = [{
+    Preserves PT2E per-tensor, per-channel, per-channel-group, and per-token
+    quantization as `iree_linalg_ext.quantize_affine` and `dequantize_affine`
+    operations. This pass runs before Torch-to-Linalg expands the PT2E
+    operations into generic arithmetic so later IREE optimization can still
+    identify quantized computations.
+  }];
+}
+
 def SetStrictSymbolicShapesPass :
     InterfacePass<"torch-iree-set-strict-symbolic-shapes", "mlir::FunctionOpInterface"> {
   let summary = "Adds the attribute indicating strict symbolic shapes in Torch IR";
@@ -48,6 +60,19 @@ def FuncConversionPass :
           "If enabled, this option will append an external hal buffer to "
           "program inputs. This buffer will be used for storing transient "
           "memory and must be provided by the user.">];
+}
+
+def SyncFuncConversionPass :
+    Pass<"torch-iree-sync-func-conversion", "ModuleOp"> {
+  let summary = "Finalizes conversion from torch to IREE with a sync-only ABI";
+  let description = [{
+    Synchronous-only alternative to torch-iree-func-conversion for targets
+    where the coarse-fences ABI is undesirable, such as programs compiled for
+    the inline HAL. Entry points keep their original name and a plain builtin
+    tensor ABI: no fences, no HAL imports/exports, and no $async variant.
+    Mutable tensor arguments require in-place aliasing through the HAL and are
+    not supported.
+  }];
 }
 
 #endif // IREE_COMPILER_PLUGINS_INPUT_TORCH_INPUTCONVERSION_PASSES

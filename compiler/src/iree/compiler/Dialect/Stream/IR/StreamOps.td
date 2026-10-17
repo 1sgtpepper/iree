@@ -378,7 +378,7 @@ def Stream_ResourceSizeOp : Stream_PureOp<"resource.size", [
 
   let assemblyFormat = [{
     $operand
-    attr-dict `:` type($operand)
+    prop-dict attr-dict `:` type($operand)
   }];
 
   let extraClassDeclaration = [{
@@ -2524,6 +2524,10 @@ def Stream_AsyncTransferOp : Stream_PureOp<"async.transfer", [
     to a `local` lifetime) or different affinities. This is roughly equivalent
     to a cast but may have special semantics when later lowered to one or more
     devices with discrete memory spaces or pools.
+
+    The optional execution affinity specifies where the transfer must execute
+    independently of the source and target storage affinities. When omitted an
+    execution affinity is derived from the resource lifetimes and endpoints.
   }];
 
   let arguments = (ins
@@ -2534,7 +2538,8 @@ def Stream_AsyncTransferOp : Stream_PureOp<"async.transfer", [
     Stream_Size:$source_size,
     Stream_Size:$result_size,
     OptionalAttr<Stream_AffinityAttr>:$source_affinity,
-    OptionalAttr<Stream_AffinityAttr>:$target_affinity
+    OptionalAttr<Stream_AffinityAttr>:$target_affinity,
+    OptionalAttr<Stream_AffinityAttr>:$execution_affinity
   );
   let results = (outs
     AnyTypeOf<[
@@ -2544,6 +2549,7 @@ def Stream_AsyncTransferOp : Stream_PureOp<"async.transfer", [
   );
 
   let assemblyFormat = [{
+    (`on` `(` $execution_affinity^ `)`)?
     $source `:` type($source)
     `` `{` $source_size `}`
     (`from` `(` $source_affinity^ `)`)?
@@ -2554,6 +2560,15 @@ def Stream_AsyncTransferOp : Stream_PureOp<"async.transfer", [
   }];
 
   let extraClassDeclaration = [{
+    static AsyncTransferOp create(OpBuilder &builder, Location location,
+                                  Type type, Value source, Value sourceSize,
+                                  Value resultSize, AffinityAttr sourceAffinity,
+                                  AffinityAttr targetAffinity);
+    static void build(OpBuilder &builder, OperationState &state, Type type,
+                      Value source, Value sourceSize, Value resultSize,
+                      AffinityAttr sourceAffinity,
+                      AffinityAttr targetAffinity);
+    AffinityAttr getDefaultExecutionAffinityAttr();
     Value getOperandSize(unsigned idx) { return getSourceSize(); }
     Value getResultSize(unsigned idx) { return getResultSize(); }
   }];
@@ -2822,6 +2837,8 @@ let opDocGroup = OpGroupAsyncControlFlowOps in {
 
 def Stream_AsyncFuncOp : Stream_Op<"async.func", [
   CallableOpInterface,
+  SymbolName,
+  SymbolVisibility,
   FunctionOpInterface,
   IsolatedFromAbove,
   Stream_AsyncPhaseOp,
@@ -2947,7 +2964,7 @@ def Stream_AsyncCallOp : Stream_Op<"async.call", [
     custom<DispatchOperands>($resource_operands,
                              $resource_operand_offsets,
                              $resource_operand_ends,
-                             $resource_operand_lengths) attr-dict `:`
+                             $resource_operand_lengths) prop-dict attr-dict `:`
     custom<ShapedFunctionType>(ref($resource_operands),
                                type($resource_operands), $resource_operand_sizes,
                                type($results), $result_sizes,
@@ -2967,12 +2984,13 @@ def Stream_AsyncCallOp : Stream_Op<"async.call", [
 
     /// Return the callee of this operation.
     CallInterfaceCallable getCallableForCallee() {
-      return (*this)->getAttrOfType<SymbolRefAttr>("callee");
+      return getCalleeAttr();
     }
 
     /// Set the callee for this operation.
     void setCalleeFromCallable(CallInterfaceCallable callee) {
-      (*this)->setAttr("callee", cast<SymbolRefAttr>(callee));
+      auto symbol = cast<SymbolRefAttr>(callee);
+      setCalleeAttr(cast<FlatSymbolRefAttr>(symbol));
     }
 
     Value getOperandSize(unsigned idx) {
@@ -3916,6 +3934,8 @@ def Stream_CmdDispatchOp : Stream_Op<"cmd.dispatch", [
 
 def Stream_CmdFuncOp : Stream_Op<"cmd.func", [
   CallableOpInterface,
+  SymbolName,
+  SymbolVisibility,
   FunctionOpInterface,
   IsolatedFromAbove,
   Stream_CmdPhaseOp,
@@ -4018,7 +4038,7 @@ def Stream_CmdCallOp : Stream_Op<"cmd.call", [
     custom<CmdCallOperands>($resource_operands,
                             $resource_operand_offsets,
                             $resource_operand_lengths,
-                            $resource_operand_accesses) attr-dict `:`
+                            $resource_operand_accesses) prop-dict attr-dict `:`
     custom<ShapedFunctionType>(ref($resource_operands),
                                type($resource_operands),
                                $resource_operand_sizes,
@@ -4038,12 +4058,13 @@ def Stream_CmdCallOp : Stream_Op<"cmd.call", [
 
     /// Return the callee of this operation.
     CallInterfaceCallable getCallableForCallee() {
-      return (*this)->getAttrOfType<SymbolRefAttr>("callee");
+      return getCalleeAttr();
     }
 
     /// Set the callee for this operation.
     void setCalleeFromCallable(CallInterfaceCallable callee) {
-      (*this)->setAttr("callee", cast<SymbolRefAttr>(callee));
+      auto symbol = cast<SymbolRefAttr>(callee);
+      setCalleeAttr(cast<FlatSymbolRefAttr>(symbol));
     }
 
     Value getOperandSize(unsigned idx) {
@@ -5003,6 +5024,8 @@ let opDocGroup = OpGroupExecutableOps in {
 def Stream_ExecutableOp : Stream_Op<"executable", [
   IsolatedFromAbove,
   SingleBlockImplicitTerminator<"IREE::Stream::ExecutableEndOp">,
+  SymbolName,
+  SymbolVisibility,
   Symbol,
   SymbolTable,
   Util_ObjectLike,
@@ -5055,6 +5078,8 @@ def Stream_ExecutableEndOp : Stream_Op<"executable.end", [
 
 def Stream_ExecutableExportOp : Stream_Op<"executable.export", [
   HasParent<"IREE::Stream::ExecutableOp">,
+  SymbolName,
+  SymbolVisibility,
   Symbol,
   IsolatedFromAbove,
 ]> {

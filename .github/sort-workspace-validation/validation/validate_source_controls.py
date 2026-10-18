@@ -561,9 +561,14 @@ module attributes { transform.with_named_sequence } {
     )
     require(
         result.stderr.count("unexpected error:") == 3
-        and result.stderr.count("unexpected error: failed to generate tiling loops")
+        and result.stderr.count(
+            "unexpected error: 'iree_linalg_ext.sort' op failed to generate tiling loops"
+        )
         == 2
-        and result.stderr.count("unexpected error: failed to tile operation") == 1,
+        and result.stderr.count(
+            "unexpected error: 'iree_linalg_ext.sort' op failed to tile operation"
+        )
+        == 1,
         "constant offset guard failed for an unrelated reason",
     )
     report["runs"][-1][
@@ -612,7 +617,7 @@ print(
     json.dumps(
         {
             "verdict": "pass",
-            "controls": 7,
+            "controls": 8,
             "source_restored": True,
             "head": identity["head"],
         }

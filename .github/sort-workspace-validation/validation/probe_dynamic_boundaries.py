@@ -9,6 +9,7 @@
 import hashlib
 import json
 from pathlib import Path
+import shlex
 import subprocess
 import sys
 
@@ -32,16 +33,20 @@ def sha(path):
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
-def run(name, argv, timeout=180):
+def run(name, argv, timeout=180, stdout_path=None):
     argv = [str(arg) for arg in argv]
     try:
         completed = subprocess.run(argv, capture_output=True, text=True, timeout=timeout)
         status = completed.returncode
+        stdout = completed.stdout
         output = completed.stdout + completed.stderr
     except subprocess.TimeoutExpired as exc:
         status = "timeout"
+        stdout = (exc.stdout or b"").decode(errors="replace")
         output = (exc.stdout or b"").decode(errors="replace") + (exc.stderr or b"").decode(errors="replace")
     (out / (name + ".log")).write_text(output)
+    if stdout_path is not None:
+        stdout_path.write_text(stdout)
     record["commands"].append({"name": name, "argv": argv, "exit_status": status})
     save()
     return status, output
@@ -125,9 +130,8 @@ for name, fixture in fixtures.items():
                 function = "local_shared_scalar_observed_keys"
             else:
                 inputs = [values, labels]
-                order = sorted(range(values.size), key=values.__getitem__, reverse=True)
                 expected = [
-                    labels[order],
+                    labels,
                     np.sort(values, kind="stable"),
                     values,
                     labels,
@@ -150,15 +154,60 @@ for name, fixture in fixtures.items():
             argv.extend(paths)
             argv.extend("--output=@" + str(path) for path in outputs)
             status, _ = run(prefix, argv)
-            match = status == 0 and all(
-                path.is_file()
-                and (actual := np.load(path, allow_pickle=False)).dtype == wanted.dtype
-                and actual.shape == wanted.shape
-                and np.array_equal(actual, wanted)
-                for path, wanted in zip(outputs, expected)
+            actual = [np.load(path, allow_pickle=False) for path in outputs] if status == 0 and all(path.is_file() for path in outputs) else []
+            match = len(actual) == len(expected) and all(
+                value.dtype == wanted.dtype
+                and value.shape == wanted.shape
+                and (name == "dependent-observed" and index == 0 or np.array_equal(value, wanted))
+                for index, (value, wanted) in enumerate(zip(actual, expected))
             )
+            if match and name == "dependent-observed":
+                # Equal keys may exchange labels. Preserve each key-label pair
+                # and require the labels to follow descending key order.
+                lookup = {int(label): int(key) for key, label in zip(values, labels)}
+                match = (
+                    np.array_equal(np.sort(actual[0]), np.sort(labels))
+                    and np.array_equal(
+                        np.array([lookup[int(label)] for label in actual[0]], dtype=np.int64),
+                        np.sort(values)[::-1],
+                    )
+                )
             case["runtime"].append({"name": prefix, "exit_status": status, "oracle": "pass" if match else "fail"})
             save()
+
+# Replay both RUN lines from the newly registered project fixture. This checks
+# its actual source text in addition to the independent array oracles above.
+fixture = source / "tests/e2e/regression/sort_dynamic_observed_versions.mlir"
+lines = [line.removeprefix("// RUN: ") for line in fixture.read_text().splitlines() if line.startswith("// RUN: ")]
+record["project_fixture_sha256"] = sha(fixture)
+record["project_run_lines"] = []
+for number, line in enumerate(lines):
+    tokens = shlex.split(line)
+    if "|" not in tokens:
+        record["project_run_lines"].append({"line": number, "status": "unsupported"})
+        continue
+    split = tokens.index("|")
+    command, check = tokens[:split], tokens[split + 1 :]
+    if command[0] != "iree-run-mlir" or check[0] != "FileCheck":
+        record["project_run_lines"].append({"line": number, "status": "unsupported"})
+        continue
+    stdout_path = out / f"project-run-{number}.txt"
+    status, _ = run(
+        f"project-run-{number}",
+        [build / "tools/iree-run-mlir", "--task_topology_group_count=2"]
+        + [str(fixture) if arg == "%s" else arg for arg in command[1:]],
+        stdout_path=stdout_path,
+    )
+    check_status = "not run"
+    if status == 0:
+        check_status, _ = run(
+            f"project-check-{number}",
+            [build / "llvm-project/bin/FileCheck"]
+            + [str(fixture) if arg == "%s" else arg for arg in check[1:]]
+            + ["--input-file=" + str(stdout_path)],
+        )
+    record["project_run_lines"].append({"line": number, "status": status, "check_status": check_status})
+    save()
 record["verdict"] = "pass" if all(
     case["compile"] == 0
     and case["has_conversion_ir"]
@@ -167,6 +216,9 @@ record["verdict"] = "pass" if all(
     and len(case["runtime"]) == 12
     and all(row["oracle"] == "pass" for row in case["runtime"])
     for case in record["cases"].values()
+) and len(record["project_run_lines"]) == 2 and all(
+    row.get("status") == 0 and row.get("check_status") == 0
+    for row in record["project_run_lines"]
 ) else "fail"
 save()
 print(json.dumps({"verdict": record["verdict"], "cases": record["cases"]}, indent=2))

@@ -165,6 +165,7 @@ try:
                 "argsort_local_keys",
                 "two_sorts_original_version",
                 "sort_preserve_intermediate_version",
+                "sort_dynamic_observed_versions",
             )
         ],
         "compiler/src/iree/compiler/DispatchCreation/test/convert_region_to_workgroups.mlir",
@@ -243,7 +244,7 @@ try:
     # Preserve allocation/working roles and deterministically destroy initialization.
     restore()
     text = final_files[relative].decode()
-    pattern = r"linalg::CopyOp::create\(rewriter, sortOp.getLoc\(\), ValueRange\{source\},\s*ValueRange\{allocation.getResult\(\)\}\);"
+    pattern = r"(?<=auto copy =\n          )linalg::CopyOp::create\(rewriter, sortOp.getLoc\(\), ValueRange\{source\},\s*ValueRange\{allocation.getResult\(\)\}\);"
     text = text.replace(
         '#include "mlir/Dialect/Affine/IR/AffineOps.h"',
         '#include "mlir/Dialect/Affine/IR/AffineOps.h"\n#include "mlir/Dialect/Arith/IR/Arith.h"',

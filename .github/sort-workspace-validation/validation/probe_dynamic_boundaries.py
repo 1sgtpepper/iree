@@ -102,6 +102,12 @@ for name, fixture in fixtures.items():
     case["compile"] = status
     case["has_conversion_ir"] = "IR Dump After ConvertDispatchRegionsToWorkgroupsPass" in diagnostic
     case["has_bufferization_ir"] = "IR Dump After IREEComprehensiveBufferizePass" in diagnostic
+    if name == "local-shared-scalar":
+        before = diagnostic.split("IR Dump Before ConvertDispatchRegionsToWorkgroupsPass", 1)[-1]
+        before = before.split("IR Dump After ConvertDispatchRegionsToWorkgroupsPass", 1)[0]
+        region = before.split("flow.dispatch.region", 1)[-1]
+        region = region.split("flow.return", 1)[0]
+        case["scalar_inside_region"] = "tensor.extract" in region
     if status != 0 or not module.is_file() or not case["has_conversion_ir"] or not case["has_bufferization_ir"]:
         save()
         continue
@@ -112,8 +118,8 @@ for name, fixture in fixtures.items():
                 inputs = [labels]
                 expected = [
                     labels[::-1],
-                    np.arange(values.size, 0, -1, dtype=np.int64),
-                    np.full(values.size, values.size, dtype=np.int64),
+                    np.arange(values.size, 0, -1, dtype=np.int64) + int(labels.sum()),
+                    np.full(values.size, int(labels.sum()), dtype=np.int64),
                     labels,
                 ]
                 function = "local_shared_scalar_observed_keys"
@@ -157,6 +163,7 @@ record["verdict"] = "pass" if all(
     case["compile"] == 0
     and case["has_conversion_ir"]
     and case["has_bufferization_ir"]
+    and case.get("scalar_inside_region", True)
     and len(case["runtime"]) == 12
     and all(row["oracle"] == "pass" for row in case["runtime"])
     for case in record["cases"].values()

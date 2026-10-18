@@ -1,13 +1,23 @@
 // A local key initializer shares its scalar with a live auxiliary fill.
 // The original key version remains observable after Sort.
 #identity = affine_map<(d0) -> (d0)>
+#scalar = affine_map<(d0) -> ()>
 func.func @local_shared_scalar_observed_keys(%labels: tensor<?xi64>)
     -> (tensor<?xi64>, tensor<?xi64>, tensor<?xi64>, tensor<?xi64>) {
   %c0 = arith.constant 0 : index
   %n = tensor.dim %labels, %c0 : tensor<?xi64>
   %results:3 = flow.dispatch.region ->
       (tensor<?xi64>{%n}, tensor<?xi64>{%n}, tensor<?xi64>{%n}) {
-    %seed = arith.index_cast %n : index to i64
+    %zero = arith.constant 0 : i64
+    %sum_empty = tensor.empty() : tensor<i64>
+    %sum_init = linalg.fill ins(%zero : i64) outs(%sum_empty : tensor<i64>) -> tensor<i64>
+    %sum = linalg.generic {indexing_maps = [#identity, #scalar], iterator_types = ["reduction"]}
+        ins(%labels : tensor<?xi64>) outs(%sum_init : tensor<i64>) {
+    ^bb0(%label: i64, %acc: i64):
+      %next = arith.addi %label, %acc : i64
+      linalg.yield %next : i64
+    } -> tensor<i64>
+    %seed = tensor.extract %sum[] : tensor<i64>
     %key_empty = tensor.empty(%n) : tensor<?xi64>
     %filled = linalg.fill ins(%seed : i64) outs(%key_empty : tensor<?xi64>) -> tensor<?xi64>
     %keys = linalg.generic {indexing_maps = [#identity], iterator_types = ["parallel"]}

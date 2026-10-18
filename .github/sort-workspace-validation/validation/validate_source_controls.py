@@ -205,6 +205,41 @@ try:
         + identity["head"]
     )
 
+    # Capture both boundary diagnostics from the already-built base compiler.
+    # These are comparisons, not success controls: either source may reject a
+    # fixture, and the diagnostic must be inspected before classifying it.
+    report["baseline_boundaries"] = {}
+    for name, fixture_name in (
+        ("local-shared-scalar", "local_shared_scalar_observed_keys.mlir"),
+        ("dependent-observed", "dependent_observed_dynamic.mlir"),
+    ):
+        boundary_fixture = root / "validation/fixtures" / fixture_name
+        boundary = subprocess.run(
+            [
+                str(compiler),
+                str(boundary_fixture),
+                *flags,
+                "--mlir-print-ir-before=iree-dispatch-creation-convert-dispatch-regions-to-workgroups",
+                "--mlir-print-ir-after=iree-dispatch-creation-convert-dispatch-regions-to-workgroups,iree-codegen-iree-comprehensive-bufferize",
+                "-o",
+                str(out / ("baseline-" + name + ".vmfb")),
+            ],
+            capture_output=True,
+            text=True,
+            timeout=300,
+        )
+        (out / ("baseline-" + name + ".log")).write_text(
+            boundary.stdout + boundary.stderr
+        )
+        report["baseline_boundaries"][name] = {
+            "exit_status": boundary.returncode,
+            "fixture_sha256": hashlib.sha256(boundary_fixture.read_bytes()).hexdigest(),
+            "compiler_library_sha256": hashlib.sha256(
+                (build / "lib/libIREECompiler.so").read_bytes()
+            ).hexdigest(),
+        }
+    save()
+
     # Preserve allocation/working roles and deterministically destroy initialization.
     restore()
     text = final_files[relative].decode()

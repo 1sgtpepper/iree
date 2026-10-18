@@ -93,6 +93,9 @@ jobs:
         run: |
           bash suite/validation/validate.sh 2>&1 | tee suite/evidence/final-validation.log
 
+      - name: Probe dynamic Sort ownership boundaries
+        run: suite/.venv/bin/python suite/validation/probe_dynamic_boundaries.py
+
       - name: Record compiler cache results
         if: always()
         run: ccache --show-stats > suite/evidence/compiler-cache-stats.log

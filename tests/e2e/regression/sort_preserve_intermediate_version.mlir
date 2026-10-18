@@ -1,4 +1,5 @@
-// RUN: iree-run-mlir --Xcompiler,iree-hal-target-backends=llvm-cpu --Xcompiler,iree-llvmcpu-target-cpu=generic %s --input="4xi64=[4 1 3 2]" --input="4xi64=[7 -3 9 11]" | FileCheck %s --check-prefix=EARLIER
+// RUN: iree-run-mlir --Xcompiler,iree-hal-target-backends=llvm-cpu --Xcompiler,iree-llvmcpu-target-cpu=generic %s --function=two_sorts_keep_internal_version --input="4xi64=[4 1 3 2]" --input="4xi64=[7 -3 9 11]" | FileCheck %s --check-prefix=EARLIER
+// RUN: iree-run-mlir --Xcompiler,iree-hal-target-backends=llvm-cpu --Xcompiler,iree-llvmcpu-target-cpu=generic %s --function=dependent_observed_dynamic --input="4xi64=[4 1 3 2]" --input="4xi64=[7 -3 9 11]" | FileCheck %s --check-prefix=DYNAMIC
 
 #identity = affine_map<(d0) -> (d0)>
 // An actual data observation of the earlier version must survive the update.
@@ -42,3 +43,32 @@ func.func @two_sorts_keep_internal_version(%keys: tensor<4xi64>, %labels: tensor
 // EARLIER: i64=30
 // EARLIER: 4xi64=4 1 3 2
 // EARLIER: 4xi64=7 -3 9 11
+
+// Returning the earlier key array observes data, not just its shape.
+func.func @dependent_observed_dynamic(%keys: tensor<?xi64>, %labels: tensor<?xi64>)
+    -> (tensor<?xi64>, tensor<?xi64>, tensor<?xi64>, tensor<?xi64>) {
+  %c0 = arith.constant 0 : index
+  %n = tensor.dim %keys, %c0 : tensor<?xi64>
+  %results:2 = flow.dispatch.region -> (tensor<?xi64>{%n}, tensor<?xi64>{%n}) {
+    %ascending:2 = iree_linalg_ext.sort dimension(0)
+        outs(%keys, %labels : tensor<?xi64>, tensor<?xi64>) {
+    ^bb0(%lhs: i64, %rhs: i64, %lhs_label: i64, %rhs_label: i64):
+      %cmp = arith.cmpi sle, %lhs, %rhs : i64
+      iree_linalg_ext.yield %cmp : i1
+    } -> tensor<?xi64>, tensor<?xi64>
+    %descending:2 = iree_linalg_ext.sort dimension(0)
+        outs(%ascending#0, %ascending#1 : tensor<?xi64>, tensor<?xi64>) {
+    ^bb0(%lhs: i64, %rhs: i64, %lhs_label: i64, %rhs_label: i64):
+      %cmp = arith.cmpi sge, %lhs, %rhs : i64
+      iree_linalg_ext.yield %cmp : i1
+    } -> tensor<?xi64>, tensor<?xi64>
+    flow.return %descending#1, %ascending#0 : tensor<?xi64>, tensor<?xi64>
+  }
+  return %results#0, %results#1, %keys, %labels
+      : tensor<?xi64>, tensor<?xi64>, tensor<?xi64>, tensor<?xi64>
+}
+// DYNAMIC-LABEL: EXEC @dependent_observed_dynamic
+// DYNAMIC: 4xi64=7 9 11 -3
+// DYNAMIC: 4xi64=1 2 3 4
+// DYNAMIC: 4xi64=4 1 3 2
+// DYNAMIC: 4xi64=7 -3 9 11

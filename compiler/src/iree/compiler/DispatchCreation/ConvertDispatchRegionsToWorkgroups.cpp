@@ -234,6 +234,34 @@ convertDispatchRegionWithSortWorkspaces(IREE::Flow::DispatchRegionOp &regionOp,
         auto initialized =
             materializeSortInitializer(regionOp, source, rewriter);
         if (failed(initialized)) {
+          // Keep a local source in this dispatch when its initializer cannot
+          // move. A separate initialized workspace lets bufferization preserve
+          // the source's tensor version without an in-kernel allocation.
+          auto type = dyn_cast<RankedTensorType>(source.getType());
+          if (!type || type.hasStaticShape()) {
+            continue;
+          }
+          SmallVector<Value> dims;
+          if (failed(IREE::Flow::getOptimizedDynamicResultDims(rewriter, source,
+                                                               dims)) ||
+              llvm::any_of(dims, [&](Value dim) {
+                return regionOp.getBody().isAncestor(dim.getParentRegion());
+              })) {
+            continue;
+          }
+          rewriter.setInsertionPoint(regionOp);
+          auto allocation = IREE::Flow::TensorAllocaOp::create(
+              rewriter, sortOp.getLoc(), type, dims);
+          rewriter.setInsertionPoint(sortOp);
+          auto copy = linalg::CopyOp::create(
+              rewriter, sortOp.getLoc(), ValueRange{source},
+              ValueRange{allocation.getResult()});
+          rewriter.modifyOpInPlace(sortOp,
+                                   [&]() { init.set(copy.getResult(0)); });
+          if (!yieldedValues.contains(result)) {
+            workspaceResults.push_back(result);
+            workspaceDims.push_back(std::move(dims));
+          }
           continue;
         }
         source = *initialized;

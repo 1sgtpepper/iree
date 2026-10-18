@@ -63,6 +63,7 @@ expected_controls = {
     "old-paths-chain-compile",
     "old-paths-buffer-oracle",
     "local-initializer-compile",
+    "constant-offset-tiling",
 }
 if {
     row["name"] for row in reports["source-controls"]["runs"] if "outcome" in row
@@ -91,11 +92,13 @@ required_control_commands = {
     "old-paths-buffer-oracle",
     "local-initializer-build",
     "local-initializer-compile",
+    "constant-offset-build",
+    "constant-offset-tiling",
     "restore-build",
 }
 control_runs = reports["source-controls"]["runs"]
 if (
-    len(control_runs) != 23
+    len(control_runs) != 25
     or {row["name"] for row in control_runs} != required_control_commands
 ):
     raise SystemExit("Required control build/compile/runtime phases are incomplete")

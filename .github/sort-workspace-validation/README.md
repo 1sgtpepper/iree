@@ -1,13 +1,13 @@
 # Sort workspace CPU validation
 
 This fork-only suite builds and tests source revision
-`b2295f752829d790ff36ecff3b83b4149699e74a`, with its pinned LLVM submodule.
+`0e04c935db4b411d0c86f512d922889915075cc4`, with its pinned LLVM submodule.
 The workflow checks out that source separately from the validation branch so
 workflow changes cannot silently change the compiler revision under test.
 
 The required checks include independent ordering and input-preservation oracles,
-allocation checks, compiler fixtures, literal runtime RUN lines, and seven rebuilt
-source controls. Build failures, missing checks, unrelated diagnostics, stale
+allocation checks, compiler fixtures, literal runtime RUN lines, and eight source
+controls with successful compiler builds. Build failures, missing checks, unrelated diagnostics, stale
 reports, and escaped controls fail the run. The workspace suite requires 40
 independent runtime cases across local-sync and local-task, strict dynamic
 allocation checks, a bounded preservation-copy
@@ -72,3 +72,9 @@ On the fork this runs the existing runtime test on a hosted ARM64 CPU and
 requires its explicit success output. A missing or skipped GTest case fails.
 The original ARM64 compiler job retains its owner restriction and is reported
 as skipped on the fork; this probe does not claim an ARM64 compiler build.
+
+The full-axis regression cases require explicit extent-four tensor and buffer
+tiles to succeed. An eighth source control rebuilds the prior constant-only
+offset guard and requires both legal cases to fail for their intended tiling
+diagnostics. Missing this control or failing its compiler build rejects aggregate
+admission. Partial-axis and orthogonal-axis cases remain in the native fixture.

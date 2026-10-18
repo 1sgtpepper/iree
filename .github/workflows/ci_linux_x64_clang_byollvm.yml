@@ -14,7 +14,7 @@ permissions:
   contents: read
 
 env:
-  SOURCE_SHA: b2295f752829d790ff36ecff3b83b4149699e74a
+  SOURCE_SHA: 0e04c935db4b411d0c86f512d922889915075cc4
   CCACHE_DIR: ${{ github.workspace }}/compiler-cache
   CCACHE_BASEDIR: ${{ github.workspace }}
   CCACHE_MAXSIZE: 3G
@@ -48,7 +48,7 @@ jobs:
           cp -a ci-support/.github/sort-workspace-validation suite
           mkdir -p suite/evidence
           test "$(git -C source rev-parse HEAD)" = "${SOURCE_SHA}"
-          test "$(git -C source rev-parse HEAD^{tree})" = "d015f6fe97f0c2b32f22f52ac86df66e939b3cd2"
+          test "$(git -C source rev-parse HEAD^{tree})" = "c208fd7edce3c8cd81d2e1388657e0d4150185d4"
           git -C source cat-file -e 89ece87b89852100c0a4ac3d515e14842d090967^{commit}
           git -C source fetch --no-tags --depth=1 origin b566531c8fcdfef29bc72c497a8305e7914159fe
           git -C source cat-file -e b566531c8fcdfef29bc72c497a8305e7914159fe^{commit}

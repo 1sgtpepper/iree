@@ -114,6 +114,22 @@ exercise(
     "Required additional commands are incomplete or failed",
 )
 exercise(
+    "missing-full-axis-control",
+    "source-controls",
+    lambda report: report.update(
+        runs=[row for row in report["runs"] if row["name"] != "constant-offset-tiling"]
+    ),
+    "Required source controls are incomplete",
+)
+exercise(
+    "failed-full-axis-control-build",
+    "source-controls",
+    lambda report: next(
+        row for row in report["runs"] if row["name"] == "constant-offset-build"
+    ).update(exit_status=1),
+    "Required control build/compile/runtime status failed",
+)
+exercise(
     "failed-additional-command",
     "correctness-recheck/additional",
     lambda report: report["commands"][0].update(status=1),

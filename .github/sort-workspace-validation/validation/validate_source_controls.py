@@ -524,6 +524,51 @@ module attributes { transform.with_named_sequence } {
     report["runs"][-1][
         "outcome"
     ] = "expected local-initializer allocation failure; build succeeded"
+
+    # The constant-only offset guard rejects legal full-axis tensor and buffer
+    # tiles. The native fixture must expose both rejections after a real build.
+    restore()
+    (source / tiling_relative).write_bytes(
+        subprocess.check_output(
+            [
+                "git",
+                "-C",
+                str(source),
+                "show",
+                "b2295f752829d790ff36ecff3b83b4149699e74a:" + tiling_relative,
+            ]
+        )
+    )
+    command(
+        "constant-offset-build",
+        ["ninja", "-C", build, "-j2", "iree-compile", "iree-opt"],
+        "build",
+    )
+    result = command(
+        "constant-offset-tiling",
+        [
+            build / "tools/iree-opt",
+            source
+            / "compiler/src/iree/compiler/Dialect/LinalgExt/Transforms/test/tiling.mlir",
+            "--iree-transform-dialect-interpreter",
+            "--split-input-file",
+            "--verify-diagnostics",
+            "-canonicalize",
+            "-cse",
+        ],
+        "compiler test",
+        status=1,
+    )
+    require(
+        result.stderr.count("unexpected error:") == 3
+        and result.stderr.count("unexpected error: failed to generate tiling loops")
+        == 2
+        and result.stderr.count("unexpected error: failed to tile operation") == 1,
+        "constant offset guard failed for an unrelated reason",
+    )
+    report["runs"][-1][
+        "outcome"
+    ] = "expected rejection of legal full-axis tensor and buffer tiles; build succeeded"
     report["controls"] = "pass"
 finally:
     restore()

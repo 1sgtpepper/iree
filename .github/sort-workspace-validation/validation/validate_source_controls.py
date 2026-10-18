@@ -561,7 +561,8 @@ module attributes { transform.with_named_sequence } {
     )
     require(
         result.stderr.count("unexpected error:") == 3
-        and result.stderr.count("unexpected error: failed to generate tiling loops") == 2
+        and result.stderr.count("unexpected error: failed to generate tiling loops")
+        == 2
         and result.stderr.count("unexpected error: failed to tile operation") == 1,
         "constant offset guard failed for an unrelated reason",
     )

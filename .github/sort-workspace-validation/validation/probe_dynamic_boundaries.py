@@ -118,7 +118,7 @@ for name, fixture in fixtures.items():
                 inputs = [labels]
                 expected = [
                     labels[::-1],
-                    np.arange(values.size, 0, -1, dtype=np.int64) + int(labels.sum()),
+                    int(labels.sum()) - np.arange(values.size, dtype=np.int64),
                     np.full(values.size, int(labels.sum()), dtype=np.int64),
                     labels,
                 ]

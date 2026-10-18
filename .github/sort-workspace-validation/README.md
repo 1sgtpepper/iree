@@ -7,8 +7,8 @@ workflow changes cannot silently change the compiler revision under test.
 
 The required checks include independent ordering and input-preservation oracles,
 allocation checks, compiler fixtures, literal runtime RUN lines, and eight source
-controls with successful compiler builds. Build failures, missing checks, unrelated diagnostics, stale
-reports, and escaped controls fail the run. The workspace suite requires 40
+controls with successful compiler builds. Build failures, missing checks, unrelated
+diagnostics, stale reports, and escaped controls fail the run. The workspace suite requires 40
 independent runtime cases across local-sync and local-task, strict dynamic
 allocation checks, a bounded preservation-copy
 check and the intended buffer-tiling rejection. The final source is restored and

@@ -36,14 +36,18 @@ def sha(path):
 def run(name, argv, timeout=180, stdout_path=None):
     argv = [str(arg) for arg in argv]
     try:
-        completed = subprocess.run(argv, capture_output=True, text=True, timeout=timeout)
+        completed = subprocess.run(
+            argv, capture_output=True, text=True, timeout=timeout
+        )
         status = completed.returncode
         stdout = completed.stdout
         output = completed.stdout + completed.stderr
     except subprocess.TimeoutExpired as exc:
         status = "timeout"
         stdout = (exc.stdout or b"").decode(errors="replace")
-        output = (exc.stdout or b"").decode(errors="replace") + (exc.stderr or b"").decode(errors="replace")
+        output = (exc.stdout or b"").decode(errors="replace") + (
+            exc.stderr or b""
+        ).decode(errors="replace")
     (out / (name + ".log")).write_text(output)
     if stdout_path is not None:
         stdout_path.write_text(stdout)
@@ -53,9 +57,15 @@ def run(name, argv, timeout=180, stdout_path=None):
 
 
 save()
-head = subprocess.check_output(["git", "-C", source, "rev-parse", "HEAD"], text=True).strip()
-tree = subprocess.check_output(["git", "-C", source, "rev-parse", "HEAD^{tree}"], text=True).strip()
-clean = not subprocess.check_output(["git", "-C", source, "status", "--porcelain"], text=True).strip()
+head = subprocess.check_output(
+    ["git", "-C", source, "rev-parse", "HEAD"], text=True
+).strip()
+tree = subprocess.check_output(
+    ["git", "-C", source, "rev-parse", "HEAD^{tree}"], text=True
+).strip()
+clean = not subprocess.check_output(
+    ["git", "-C", source, "status", "--porcelain"], text=True
+).strip()
 library = build / "lib/libIREECompiler.so"
 record["compiler_library_sha256"] = sha(library)
 if not (
@@ -66,7 +76,10 @@ if not (
     and clean
     and previous.get("compiler_library_sha256") == record["compiler_library_sha256"]
 ):
-    record.update(verdict="fail", failure="exact-source build or restored source identity was not admitted")
+    record.update(
+        verdict="fail",
+        failure="exact-source build or restored source identity was not admitted",
+    )
     save()
     sys.exit(1)
 
@@ -74,7 +87,8 @@ compiler = build / "tools/iree-compile"
 runtime = build / "tools/iree-run-module"
 record["compiler_sha256"] = sha(compiler)
 fixtures = {
-    "local-shared-scalar": root / "validation/fixtures/local_shared_scalar_observed_keys.mlir",
+    "local-shared-scalar": root
+    / "validation/fixtures/local_shared_scalar_observed_keys.mlir",
     "dependent-observed": root / "validation/fixtures/dependent_observed_dynamic.mlir",
 }
 record["fixture_sha256"] = {name: sha(path) for name, path in fixtures.items()}
@@ -105,15 +119,28 @@ for name, fixture in fixtures.items():
         ],
     )
     case["compile"] = status
-    case["has_conversion_ir"] = "IR Dump After ConvertDispatchRegionsToWorkgroupsPass" in diagnostic
-    case["has_bufferization_ir"] = "IR Dump After IREEComprehensiveBufferizePass" in diagnostic
+    case["has_conversion_ir"] = (
+        "IR Dump After ConvertDispatchRegionsToWorkgroupsPass" in diagnostic
+    )
+    case["has_bufferization_ir"] = (
+        "IR Dump After IREEComprehensiveBufferizePass" in diagnostic
+    )
     if name == "local-shared-scalar":
-        before = diagnostic.split("IR Dump Before ConvertDispatchRegionsToWorkgroupsPass", 1)[-1]
-        before = before.split("IR Dump After ConvertDispatchRegionsToWorkgroupsPass", 1)[0]
+        before = diagnostic.split(
+            "IR Dump Before ConvertDispatchRegionsToWorkgroupsPass", 1
+        )[-1]
+        before = before.split(
+            "IR Dump After ConvertDispatchRegionsToWorkgroupsPass", 1
+        )[0]
         region = before.split("flow.dispatch.region", 1)[-1]
         region = region.split("flow.return", 1)[0]
         case["scalar_inside_region"] = "tensor.extract" in region
-    if status != 0 or not module.is_file() or not case["has_conversion_ir"] or not case["has_bufferization_ir"]:
+    if (
+        status != 0
+        or not module.is_file()
+        or not case["has_conversion_ir"]
+        or not case["has_bufferization_ir"]
+    ):
         save()
         continue
     for device in ("local-sync", "local-task"):
@@ -148,37 +175,61 @@ for name, fixture in fixtures.items():
                 path = out / f"{prefix}-output-{index}.npy"
                 path.unlink(missing_ok=True)
                 outputs.append(path)
-            argv = [runtime, "--module=" + str(module), "--device=" + device, "--function=" + function]
+            argv = [
+                runtime,
+                "--module=" + str(module),
+                "--device=" + device,
+                "--function=" + function,
+            ]
             if device == "local-task":
                 argv.append("--task_topology_group_count=2")
             argv.extend(paths)
             argv.extend("--output=@" + str(path) for path in outputs)
             status, _ = run(prefix, argv)
-            actual = [np.load(path, allow_pickle=False) for path in outputs] if status == 0 and all(path.is_file() for path in outputs) else []
+            actual = (
+                [np.load(path, allow_pickle=False) for path in outputs]
+                if status == 0 and all(path.is_file() for path in outputs)
+                else []
+            )
             match = len(actual) == len(expected) and all(
                 value.dtype == wanted.dtype
                 and value.shape == wanted.shape
-                and (name == "dependent-observed" and index == 0 or np.array_equal(value, wanted))
+                and (
+                    name == "dependent-observed"
+                    and index == 0
+                    or np.array_equal(value, wanted)
+                )
                 for index, (value, wanted) in enumerate(zip(actual, expected))
             )
             if match and name == "dependent-observed":
                 # Equal keys may exchange labels. Preserve each key-label pair
                 # and require the labels to follow descending key order.
                 lookup = {int(label): int(key) for key, label in zip(values, labels)}
-                match = (
-                    np.array_equal(np.sort(actual[0]), np.sort(labels))
-                    and np.array_equal(
-                        np.array([lookup[int(label)] for label in actual[0]], dtype=np.int64),
-                        np.sort(values)[::-1],
-                    )
+                match = np.array_equal(
+                    np.sort(actual[0]), np.sort(labels)
+                ) and np.array_equal(
+                    np.array(
+                        [lookup[int(label)] for label in actual[0]], dtype=np.int64
+                    ),
+                    np.sort(values)[::-1],
                 )
-            case["runtime"].append({"name": prefix, "exit_status": status, "oracle": "pass" if match else "fail"})
+            case["runtime"].append(
+                {
+                    "name": prefix,
+                    "exit_status": status,
+                    "oracle": "pass" if match else "fail",
+                }
+            )
             save()
 
 # Replay both RUN lines from the newly registered project fixture. This checks
 # its actual source text in addition to the independent array oracles above.
 fixture = source / "tests/e2e/regression/sort_dynamic_observed_versions.mlir"
-lines = [line.removeprefix("// RUN: ") for line in fixture.read_text().splitlines() if line.startswith("// RUN: ")]
+lines = [
+    line.removeprefix("// RUN: ")
+    for line in fixture.read_text().splitlines()
+    if line.startswith("// RUN: ")
+]
 record["project_fixture_sha256"] = sha(fixture)
 record["project_run_lines"] = []
 for number, line in enumerate(lines):
@@ -206,20 +257,28 @@ for number, line in enumerate(lines):
             + [str(fixture) if arg == "%s" else arg for arg in check[1:]]
             + ["--input-file=" + str(stdout_path)],
         )
-    record["project_run_lines"].append({"line": number, "status": status, "check_status": check_status})
+    record["project_run_lines"].append(
+        {"line": number, "status": status, "check_status": check_status}
+    )
     save()
-record["verdict"] = "pass" if all(
-    case["compile"] == 0
-    and case["has_conversion_ir"]
-    and case["has_bufferization_ir"]
-    and case.get("scalar_inside_region", True)
-    and len(case["runtime"]) == 12
-    and all(row["oracle"] == "pass" for row in case["runtime"])
-    for case in record["cases"].values()
-) and len(record["project_run_lines"]) == 2 and all(
-    row.get("status") == 0 and row.get("check_status") == 0
-    for row in record["project_run_lines"]
-) else "fail"
+record["verdict"] = (
+    "pass"
+    if all(
+        case["compile"] == 0
+        and case["has_conversion_ir"]
+        and case["has_bufferization_ir"]
+        and case.get("scalar_inside_region", True)
+        and len(case["runtime"]) == 12
+        and all(row["oracle"] == "pass" for row in case["runtime"])
+        for case in record["cases"].values()
+    )
+    and len(record["project_run_lines"]) == 2
+    and all(
+        row.get("status") == 0 and row.get("check_status") == 0
+        for row in record["project_run_lines"]
+    )
+    else "fail"
+)
 save()
 print(json.dumps({"verdict": record["verdict"], "cases": record["cases"]}, indent=2))
 sys.exit(0 if record["verdict"] == "pass" else 1)

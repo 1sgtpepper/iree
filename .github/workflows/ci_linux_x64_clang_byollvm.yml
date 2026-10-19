@@ -96,6 +96,9 @@ jobs:
       - name: Probe dynamic Sort ownership boundaries
         run: suite/.venv/bin/python suite/validation/probe_dynamic_boundaries.py
 
+      - name: Compare ordinary DPS version storage
+        run: suite/.venv/bin/python suite/validation/probe_dps_versions.py
+
       - name: Record compiler cache results
         if: always()
         run: ccache --show-stats > suite/evidence/compiler-cache-stats.log

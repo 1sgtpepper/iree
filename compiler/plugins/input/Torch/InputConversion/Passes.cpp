@@ -66,6 +66,8 @@ void createTorchToIREEPipeline(
   pm.addNestedPass<func::FuncOp>(torch::createConvertTorchToTensorPass());
   pm.addNestedPass<func::FuncOp>(
       TorchInput::createConvertTorchUnstructuredToLinalgExtPass());
+  pm.addNestedPass<func::FuncOp>(
+      TorchInput::createConvertTorchQuantizationToLinalgExtPass());
   pm.addNestedPass<func::FuncOp>(torch::createConvertTorchToLinalgPass());
   pm.addNestedPass<func::FuncOp>(createCSEPass());
   pm.addNestedPass<func::FuncOp>(torch::createConvertTorchToSCFPass());
@@ -86,7 +88,13 @@ void createTorchToIREEPipeline(
   // differently and would not be subject to inlining.
   pm.addPass(mlir::createInlinerPass());
 
-  pm.addPass(createFuncConversionPass({options.externalizeTransients}));
+  if (options.emitAsyncEntryPoints) {
+    pm.addPass(createFuncConversionPass({options.externalizeTransients}));
+  } else {
+    // Sync-only entry points (e.g. for the inline HAL). Externalized
+    // transients require the coarse-fences ABI and do not apply here.
+    pm.addPass(createSyncFuncConversionPass());
+  }
   pm.addNestedPass<IREE::Util::FuncOp>(createCanonicalizerPass());
   pm.addPass(createSymbolDCEPass());
 

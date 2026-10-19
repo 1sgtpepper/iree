@@ -33,10 +33,10 @@ builtin.module attributes { transform.with_named_sequence } {
 // CHECK: %[[YX:.+]]:3 = affine.delinearize_index %[[IDX]] into (4, 8)
 // CHECK: %[[Y_SCALED:.+]] = affine.linearize_index disjoint [%[[YX]]#1, %c0] by (4, 4)
 // CHECK: %[[RD00:.+]] = vector.transfer_read %arg0[%[[Y_SCALED]], %[[YX]]#2], {{.*}} : memref<32x32xf16>, vector<4x1xf16>
-// CHECK: vector.insert_strided_slice %[[RD00]], %{{.*}} {offsets = [0, 0, 0, 0, 0, 0], strides = [1, 1]} : vector<4x1xf16> into vector<1x2x1x1x4x1xf16>
+// CHECK: vector.insert_strided_slice %[[RD00]], %{{.*}} offsets = [0, 0, 0, 0, 0, 0], strides = [1, 1] : vector<4x1xf16> into vector<1x2x1x1x4x1xf16>
 // CHECK: %[[X_PLUS_BATCH:.+]] = affine.linearize_index disjoint [%c1, %[[YX]]#2] by (2, 8)
 // CHECK: vector.transfer_read %arg0[%[[Y_SCALED]], %[[X_PLUS_BATCH]]], %{{.*}} {in_bounds = [true, true]} : memref<32x32xf16>, vector<4x1xf16>
-// CHECK: vector.insert_strided_slice {{.*}} {offsets = [0, 1, 0, 0, 0, 0]
+// CHECK: vector.insert_strided_slice {{.*}} offsets = [0, 1, 0, 0, 0, 0]
 // CHECK: iree_vector_ext.to_simd %{{.*}} : vector<1x2x1x1x4x1xf16> -> vector<16x16xf16>
 
 // -----
@@ -121,8 +121,8 @@ builtin.module attributes { transform.with_named_sequence } {
 // CHECK-SAME:    %[[I0:.+]]: index, %[[I1:.+]]: index
 
 // CHECK: %[[BROADCAST_READ:.+]] = vector.transfer_read %{{.*}}[%c0, %c0, %[[I0]], %[[I1]]], %{{.*}} permutation_map = #[[$MAP]]
-// CHECK: vector.insert_strided_slice %[[BROADCAST_READ]], %{{.*}} {offsets = [0, 0, 0, 0, 0, 0]
-// CHECK: vector.insert_strided_slice %[[BROADCAST_READ]], %{{.*}} {offsets = [0, 1, 0, 0, 0, 0]
+// CHECK: vector.insert_strided_slice %[[BROADCAST_READ]], %{{.*}} offsets = [0, 0, 0, 0, 0, 0]
+// CHECK: vector.insert_strided_slice %[[BROADCAST_READ]], %{{.*}} offsets = [0, 1, 0, 0, 0, 0]
 
 // -----
 
@@ -1268,10 +1268,10 @@ func.func @paged_transfer_gather(%indices: vector<16xindex>,
   %c0 = arith.constant 0 : index
 
   %out = iree_vector_ext.transfer_gather %source[%c0, %c0, %c0]
-  [%indices : vector<16xindex>], %cst0 {
+  [%indices : vector<16xindex>], %cst0 <
     indexing_maps = [affine_map<(d0, d1)[s0] -> (0, s0, d1)>,
                      affine_map<(d0, d1)[s0] -> (d0)>]
-  } : memref<4096x512x8xf16>, vector<16x8xf16>
+  > : memref<4096x512x8xf16>, vector<16x8xf16>
 
   %l_out = iree_vector_ext.to_layout %out to layout(#layout) : vector<16x8xf16>
 
@@ -1319,11 +1319,11 @@ func.func @paged_transfer_gather_multi_index(%indices: vector<16xindex>,
   %c0 = arith.constant 0 : index
 
   %out = iree_vector_ext.transfer_gather %source[%c0, %c0, %c0]
-  [%indices, %indices2 : vector<16xindex>, vector<8x16xindex>], %cst0 {
+  [%indices, %indices2 : vector<16xindex>, vector<8x16xindex>], %cst0 <
     indexing_maps = [affine_map<(d0, d1)[s0, s1] -> (0, s0, s1)>,
                      affine_map<(d0, d1)[s0, s1] -> (d0)>,
                      affine_map<(d0, d1)[s0, s1] -> (d1, d0)>]
-  } : memref<4096x512x8xf16>, vector<16x8xf16>
+  > : memref<4096x512x8xf16>, vector<16x8xf16>
 
   %l_out = iree_vector_ext.to_layout %out to layout(#layout) : vector<16x8xf16>
 
@@ -1504,7 +1504,7 @@ func.func @lanes_fully_distributed(%out: memref<100x100xf32, #amdgpu.address_spa
 builtin.module attributes { transform.with_named_sequence } {
   transform.named_sequence @__transform_main(%variant_op: !transform.any_op {transform.readonly}) {
     %top_level_func = transform.structured.match ops{["func.func"]} in %variant_op : (!transform.any_op) -> !transform.any_op
-    transform.iree.test_gpu_vector_distribution %top_level_func {workgroup_size = array<i64: 256, 1, 1>} : !transform.any_op
+    transform.iree.test_gpu_vector_distribution %top_level_func <{workgroup_size = array<i64: 256, 1, 1>}> : !transform.any_op
     transform.yield
   }
 }
@@ -1538,7 +1538,7 @@ func.func @threads_fully_distributed(%out: memref<100x100xf32, #amdgpu.address_s
 builtin.module attributes { transform.with_named_sequence } {
   transform.named_sequence @__transform_main(%variant_op: !transform.any_op {transform.readonly}) {
     %top_level_func = transform.structured.match ops{["func.func"]} in %variant_op : (!transform.any_op) -> !transform.any_op
-    transform.iree.test_gpu_vector_distribution %top_level_func {workgroup_size = array<i64: 64, 1, 1>} : !transform.any_op
+    transform.iree.test_gpu_vector_distribution %top_level_func <{workgroup_size = array<i64: 64, 1, 1>}> : !transform.any_op
     transform.yield
   }
 }

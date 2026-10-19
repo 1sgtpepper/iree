@@ -18,7 +18,7 @@ func.func @pad_matmul_static_dispatch_0() {
   %5 = linalg.fill ins(%cst : f32) outs(%50 : tensor<250x1020xf32>) -> tensor<250x1020xf32>
 
   // CHECK: linalg.fill ins(%{{.*}} : f32) outs(%{{.*}} : memref<250x1020xf32, #hal.descriptor_type<storage_buffer>>)
-  // CHECK: memref.alloc() {alignment = 64 : i64} : memref<250x500xf32, #gpu.address_space<workgroup>>
+  // CHECK: memref.alloc() alignment = 64 : memref<250x500xf32, #gpu.address_space<workgroup>>
   // CHECK: gpu.barrier memfence [#gpu.address_space<workgroup>]
   // CHECK: linalg.generic
   // CHECK: gpu.barrier memfence [#gpu.address_space<workgroup>]
@@ -34,7 +34,7 @@ builtin.module attributes { transform.with_named_sequence } {
   transform.named_sequence @__transform_main(%arg0: !transform.any_op {transform.readonly}) {
     %func = transform.structured.match ops{["func.func"]} in %arg0 : (!transform.any_op) -> !transform.any_op
     transform.iree.eliminate_empty_tensors %func : (!transform.any_op) -> ()
-    %_ = transform.iree.bufferize { target_gpu } %func: (!transform.any_op) -> !transform.any_op
+    %_ = transform.iree.bufferize <{ target_gpu }> %func: (!transform.any_op) -> !transform.any_op
     transform.yield
   } // @__transform_main
 } // module

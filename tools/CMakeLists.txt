@@ -97,10 +97,13 @@ if(IREE_BUILD_BENCHMARKS)
       iree::base::tooling::flags
       iree::hal
       iree::hal::replay::recorder
+      iree::hal::utils::statistics_sink
       iree::modules::hal::types
       iree::tooling::context_util
       iree::tooling::device_util
       iree::tooling::function_io
+      iree::tooling::function_util
+      iree::tooling::process_results
       iree::vm
     COVERAGE ${IREE_ENABLE_RUNTIME_COVERAGE}
     INSTALL_COMPONENT IREETools-Runtime

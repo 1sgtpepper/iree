@@ -148,7 +148,7 @@ class IREEGPU_I32Enum<string name, string summary, list<EnumCase> cases>
 //     * 3 = CDNA4
 //     * 8 = RDNA3
 //     * 9 = RDNA4
-//     * A = gfx1250
+//     * A = CDNA5
 // * C = element type of A-matrix:
 //   * 0 = 64-bit float (e.g. IEEE754 double precision)
 //   * 1 = 32-bit float (e.g. IEEE754 single precision, and "xf32" fast variants)
@@ -241,7 +241,7 @@ def WMMAR4_F32_16x16x16_F8E4M3FN : I32EnumAttrCase<"WMMAR4_F32_16x16x16_F8E4M3FN
 def WMMAR4_F32_16x16x16_F8E4M3FN_F8E5M2 : I32EnumAttrCase<"WMMAR4_F32_16x16x16_F8E4M3FN_F8E5M2", 0x1933>;
 def WMMAR4_I32_16x16x16_I8 : I32EnumAttrCase<"WMMAR4_I32_16x16x16_I8", 0x19C0>;
 
-// Introduced in gfx1250.
+// Introduced in CDNA5.
 // K=4.
 def WMMA_F32_16x16x4_F32 : I32EnumAttrCase<"WMMA_F32_16x16x4_F32", 0x1A10>;
 // K=32.
@@ -273,6 +273,10 @@ def WMMA_F16_16x16x128_F8E4M3FN_F8E5M2 : I32EnumAttrCase<"WMMA_F16_16x16x128_F8E
 def NV_MMA_SYNC_F32_16x8x16_F16 : I32EnumAttrCase<"NV_MMA_SYNC_F32_16x8x16_F16", 0x2020>;
 def NV_MMA_SYNC_F16_16x8x16_F16 : I32EnumAttrCase<"NV_MMA_SYNC_F16_16x8x16_F16", 0x2021>;
 def NV_MMA_SYNC_F32_16x8x16_BF16 : I32EnumAttrCase<"NV_MMA_SYNC_F32_16x8x16_BF16", 0x2022>;
+
+// NV FP8
+def NV_MMA_SYNC_F32_16x8x32_F8E4M3FN : I32EnumAttrCase<"NV_MMA_SYNC_F32_16x8x32_F8E4M3FN", 0x2023>;
+def NV_MMA_SYNC_F32_16x8x32_F8E5M2 : I32EnumAttrCase<"NV_MMA_SYNC_F32_16x8x32_F8E5M2", 0x2024>;
 
 // opaque NV intrinsics
 def NV_WMMA_F32_16x16x16_F16 : I32EnumAttrCase<"NV_WMMA_F32_16x16x16_F16", 0x2120>;
@@ -362,7 +366,7 @@ def IREEGPU_MMAIntrinsic : IREEGPU_I32EnumAttr<"MMAIntrinsic",
       WMMAR4_F32_16x16x16_F8E4M3FN_F8E5M2,
       WMMAR4_I32_16x16x16_I8,
 
-      // gfx1250 intrinsics.
+      // CDNA5 intrinsics.
       // K=4.
       WMMA_F32_16x16x4_F32,
       // K=32.
@@ -394,6 +398,9 @@ def IREEGPU_MMAIntrinsic : IREEGPU_I32EnumAttr<"MMAIntrinsic",
       NV_MMA_SYNC_F32_16x8x16_F16,
       NV_MMA_SYNC_F16_16x8x16_F16,
       NV_MMA_SYNC_F32_16x8x16_BF16,
+      // NV FP8 intrinsics (sm_89+).
+      NV_MMA_SYNC_F32_16x8x32_F8E4M3FN,
+      NV_MMA_SYNC_F32_16x8x32_F8E5M2,
       // opaque NV intrinsics.
       NV_WMMA_F32_16x16x16_F16,
       NV_WMMA_F16_16x16x16_F16,

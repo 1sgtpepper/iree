@@ -455,6 +455,52 @@ func.func @thin_depthwise_conv_static(%3: tensor<1x57x57x72xf32>, %4: tensor<3x3
 
 // -----
 
+// The materialized data-tiled convolution generic is recognized via the
+// convolution interface and routed to the double-tiling pipeline.
+#executable_target_embedded_elf_x86_64_ = #hal.executable.target<"llvm-cpu", "embedded-elf-x86_64", {cpu_features = "+avx512f", data_layout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-f80:128-n8:16:32:64-S128", native_vector_size = 16 : index, target_triple = "x86_64-unknown-linux-gnu"}>
+#map = affine_map<(d0, d1, d2, d3, d4, d5, d6, d7, d8) -> (d0, d4, d2 + d5, d3 + d6, d8)>
+#map1 = affine_map<(d0, d1, d2, d3, d4, d5, d6, d7, d8) -> (d1, d4, d5, d6, d8, d7)>
+#map2 = affine_map<(d0, d1, d2, d3, d4, d5, d6, d7, d8) -> (d0, d1, d2, d3, d7)>
+func.func @conv_2d_nchwc_data_tiled(%arg0: tensor<1x1x16x16x16xf32>, %arg1: tensor<1x1x3x3x16x16xf32>, %arg2: tensor<1x1x14x14x16xf32>) -> tensor<1x1x14x14x16xf32> attributes {hal.executable.target = #executable_target_embedded_elf_x86_64_} {
+  %0 = linalg.generic {indexing_maps = [#map, #map1, #map2], iterator_types = ["parallel", "parallel", "parallel", "parallel", "reduction", "reduction", "reduction", "parallel", "reduction"]} ins(%arg0, %arg1 : tensor<1x1x16x16x16xf32>, tensor<1x1x3x3x16x16xf32>) outs(%arg2 : tensor<1x1x14x14x16xf32>) {
+  ^bb0(%in: f32, %in_0: f32, %out: f32):
+    %1 = arith.mulf %in, %in_0 : f32
+    %2 = arith.addf %1, %out : f32
+    linalg.yield %2 : f32
+  } -> tensor<1x1x14x14x16xf32>
+  return %0 : tensor<1x1x14x14x16xf32>
+}
+//  CHECK-DAG: #[[CONFIG:.+]] = #iree_cpu.lowering_config<distribution = [0, 0, 1, 0, 0, 0, 0, 0, 0], vector_common_parallel = [1, 1, 1, 16, 0, 0, 0, 16, 0], vector_reduction = [0, 0, 0, 0, 1, 1, 1, 0, 16]>
+//  CHECK-DAG: #[[TRANSLATION:.+]] = #iree_codegen.translation_info<pipeline = #iree_cpu.pipeline<DoubleTilingExpert>, {enable_loop_peeling}>
+//      CHECK: func.func @conv_2d_nchwc_data_tiled(
+// CHECK-SAME:     translation_info = #[[TRANSLATION]]
+//      CHECK:     linalg.generic
+// CHECK-SAME:       lowering_config = #[[CONFIG]]
+
+// -----
+
+#executable_target_embedded_elf_x86_64_ = #hal.executable.target<"llvm-cpu", "embedded-elf-x86_64", {cpu_features = "+avx512f", data_layout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-f80:128-n8:16:32:64-S128", native_vector_size = 16 : index, target_triple = "x86_64-unknown-linux-gnu", ukernels = "conv_nchwc"}>
+#map = affine_map<(d0, d1, d2, d3, d4, d5, d6, d7, d8) -> (d0, d4, d2 + d5, d3 + d6, d8)>
+#map1 = affine_map<(d0, d1, d2, d3, d4, d5, d6, d7, d8) -> (d1, d4, d5, d6, d8, d7)>
+#map2 = affine_map<(d0, d1, d2, d3, d4, d5, d6, d7, d8) -> (d0, d1, d2, d3, d7)>
+func.func @conv_2d_nchwc_data_tiled_ukernel_enable(%arg0: tensor<1x1x16x16x16xf32>, %arg1: tensor<1x1x3x3x16x16xf32>, %arg2: tensor<1x1x14x14x16xf32>) -> tensor<1x1x14x14x16xf32> attributes {hal.executable.target = #executable_target_embedded_elf_x86_64_} {
+  %0 = linalg.generic {indexing_maps = [#map, #map1, #map2], iterator_types = ["parallel", "parallel", "parallel", "parallel", "reduction", "reduction", "reduction", "parallel", "reduction"]} ins(%arg0, %arg1 : tensor<1x1x16x16x16xf32>, tensor<1x1x3x3x16x16xf32>) outs(%arg2 : tensor<1x1x14x14x16xf32>) {
+  ^bb0(%in: f32, %in_0: f32, %out: f32):
+    %1 = arith.mulf %in, %in_0 : f32
+    %2 = arith.addf %1, %out : f32
+    linalg.yield %2 : f32
+  } -> tensor<1x1x14x14x16xf32>
+  return %0 : tensor<1x1x14x14x16xf32>
+}
+//  CHECK-DAG: #[[CONFIG:.+]] = #iree_cpu.lowering_config<distribution = [0, 0, 1, 0, 0, 0, 0, 0, 0], vector_common_parallel = [1, 1, 1, 16, 0, 0, 0, 16, 0], vector_reduction = [0, 0, 0, 0, 1, 1, 1, 0, 16]>
+//  CHECK-DAG: #[[TRANSLATION:.+]] = #iree_codegen.translation_info<pipeline = #iree_cpu.pipeline<Mmt4dTilingExpert>>
+//      CHECK: func.func @conv_2d_nchwc_data_tiled_ukernel_enable(
+// CHECK-SAME:     translation_info = #[[TRANSLATION]]
+//      CHECK:     linalg.generic
+// CHECK-SAME:       lowering_config = #[[CONFIG]]
+
+// -----
+
 #executable_target_embedded_elf_x86_64_ = #hal.executable.target<"llvm-cpu", "embedded-elf-x86_64", {cpu = "cascadelake", cpu_features = "+mmx,+popcnt,+sse,+sse2,+sse3,+ssse3,+sse4.1,+sse4.2,+avx,+avx2,+fma,+avx512f,+bmi,+bmi2,+aes,+pclmul,+avx512vl,+avx512bw,+avx512dq,+avx512cd,+avx512vnni,+adx,+clflushopt,+clwb,+cx16,+cx8,+crc32,+f16c,+fsgsbase,+fxsr,+invpcid,+lzcnt,+movbe,+pku,+prfchw,+rdrnd,+rdseed,+sahf,+x87,+xsave,+xsavec,+xsaveopt,+xsaves", data_layout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-f80:128-n8:16:32:64-S128", native_vector_size = 32 : index, target_triple = "x86_64-none-elf", ukernels = false}>
 func.func @pooling_nchw_max(%2: tensor<1x64x114x114xf32>) -> tensor<1x64x56x56xf32> attributes {hal.executable.target = #executable_target_embedded_elf_x86_64_} {
   %cst = arith.constant -3.40282347E+38 : f32
@@ -1220,7 +1266,7 @@ func.func @attention(%4: tensor<20x4096x64xf16>, %5: tensor<20x4096x64xf16>, %6:
   %10 = linalg.fill ins(%cst : f32) outs(%8 : tensor<20x4096x64xf32>) -> tensor<20x4096x64xf32>
   %11 = linalg.fill ins(%cst_0 : f32) outs(%9 : tensor<20x4096xf32>) -> tensor<20x4096xf32>
   %12 = linalg.fill ins(%cst_1 : f32) outs(%9 : tensor<20x4096xf32>) -> tensor<20x4096xf32>
-  %13:3 = iree_linalg_ext.online_attention {indexing_maps = [#map, #map1, #map2, #map3, #map4, #map5, #map5]}
+  %13:3 = iree_linalg_ext.online_attention <indexing_maps = [#map, #map1, #map2, #map3, #map4, #map5, #map5]>
     ins(%4, %5, %6, %scale : tensor<20x4096x64xf16>, tensor<20x4096x64xf16>, tensor<20x4096x64xf16>, f16)
     outs(%10, %11, %12 : tensor<20x4096x64xf32>, tensor<20x4096xf32>, tensor<20x4096xf32>) {
      ^bb0(%score: f32):
@@ -1271,7 +1317,7 @@ func.func @attention_with_downstream_propagated_pack(
   %filled_out = linalg.fill ins(%zero : f32) outs(%out : tensor<20x4096x64xf32>) -> tensor<20x4096x64xf32>
   %filled_max = linalg.fill ins(%neg_inf : f32) outs(%stat : tensor<20x4096xf32>) -> tensor<20x4096xf32>
   %filled_sum = linalg.fill ins(%zero : f32) outs(%stat : tensor<20x4096xf32>) -> tensor<20x4096xf32>
-  %attention:3 = iree_linalg_ext.online_attention {indexing_maps = [#map, #map1, #map2, #map3, #map4, #map5, #map5]}
+  %attention:3 = iree_linalg_ext.online_attention <indexing_maps = [#map, #map1, #map2, #map3, #map4, #map5, #map5]>
     ins(%query, %key, %value, %scale : tensor<20x4096x64xf16>, tensor<20x4096x64xf16>, tensor<20x4096x64xf16>, f16)
     outs(%filled_out, %filled_max, %filled_sum : tensor<20x4096x64xf32>, tensor<20x4096xf32>, tensor<20x4096xf32>) {
   ^bb0(%score: f32):
@@ -1328,7 +1374,7 @@ func.func @attention_transpose_distribute_4d(%29: index, %37: tensor<4x4x?x128xf
   %45 = linalg.fill ins(%cst_0 : f32) outs(%43 : tensor<4x4x?x128xf32>) -> tensor<4x4x?x128xf32>
   %46 = linalg.fill ins(%cst_1 : f32) outs(%44 : tensor<4x4x?xf32>) -> tensor<4x4x?xf32>
   %47 = linalg.fill ins(%cst_2 : f32) outs(%44 : tensor<4x4x?xf32>) -> tensor<4x4x?xf32>
-  %48:3 = iree_linalg_ext.online_attention {indexing_maps = [#map, #map1, #map2, #map3, #map4, #map5, #map6, #map6]} ins(%37, %38, %39, %cst, %40 : tensor<4x4x?x128xf16>, tensor<4x4x?x1x1x128xf16>, tensor<4x4x?x1x1x128xf16>, f16, tensor<4x4x?x?x1x1xf16>) outs(%45, %46, %47 : tensor<4x4x?x128xf32>, tensor<4x4x?xf32>, tensor<4x4x?xf32>) {
+  %48:3 = iree_linalg_ext.online_attention <indexing_maps = [#map, #map1, #map2, #map3, #map4, #map5, #map6, #map6]> ins(%37, %38, %39, %cst, %40 : tensor<4x4x?x128xf16>, tensor<4x4x?x1x1x128xf16>, tensor<4x4x?x1x1x128xf16>, f16, tensor<4x4x?x?x1x1xf16>) outs(%45, %46, %47 : tensor<4x4x?x128xf32>, tensor<4x4x?xf32>, tensor<4x4x?xf32>) {
   ^bb0(%arg0: f32):
     iree_linalg_ext.yield %arg0 : f32
   } -> tensor<4x4x?x128xf32>, tensor<4x4x?xf32>, tensor<4x4x?xf32>
@@ -1651,7 +1697,7 @@ func.func @attention_reshape_pack(%arg0: index, %arg1: tensor<4x2x?x32xf16>, %ar
   %4 = linalg.fill ins(%cst_2 : f32) outs(%2 : tensor<4x2x?x32xf32>) -> tensor<4x2x?x32xf32>
   %5 = linalg.fill ins(%cst_3 : f32) outs(%3 : tensor<4x2x?xf32>) -> tensor<4x2x?xf32>
   %6 = linalg.fill ins(%cst_4 : f32) outs(%3 : tensor<4x2x?xf32>) -> tensor<4x2x?xf32>
-  %7:3 = iree_linalg_ext.online_attention {indexing_maps = [#map, #map1, #map2, #map3, #map4, #map5, #map6, #map6]} ins(%arg1, %arg2, %arg3, %cst_0, %arg4 : tensor<4x2x?x32xf16>, tensor<?x4x32xf16>, tensor<?x4x32xf16>, f16, tensor<4x2x?x?xf16>) outs(%4, %5, %6 : tensor<4x2x?x32xf32>, tensor<4x2x?xf32>, tensor<4x2x?xf32>) {
+  %7:3 = iree_linalg_ext.online_attention <indexing_maps = [#map, #map1, #map2, #map3, #map4, #map5, #map6, #map6]> ins(%arg1, %arg2, %arg3, %cst_0, %arg4 : tensor<4x2x?x32xf16>, tensor<?x4x32xf16>, tensor<?x4x32xf16>, f16, tensor<4x2x?x?xf16>) outs(%4, %5, %6 : tensor<4x2x?x32xf32>, tensor<4x2x?xf32>, tensor<4x2x?xf32>) {
   ^bb0(%arg5: f32):
     iree_linalg_ext.yield %arg5 : f32
   } -> tensor<4x2x?x32xf32>, tensor<4x2x?xf32>, tensor<4x2x?xf32>
@@ -1714,7 +1760,7 @@ func.func @attention_dynamic_3d(%query: tensor<?x?x?xf32>, %key: tensor<?x?x?xf3
   %3 = linalg.fill ins(%cst : f32) outs(%1 : tensor<?x?x?xf32>) -> tensor<?x?x?xf32>
   %4 = linalg.fill ins(%cst_0 : f32) outs(%2 : tensor<?x?xf32>) -> tensor<?x?xf32>
   %5 = linalg.fill ins(%cst_1 : f32) outs(%2 : tensor<?x?xf32>) -> tensor<?x?xf32>
-  %6:3 = iree_linalg_ext.online_attention {indexing_maps = [#map, #map1, #map2, #map3, #map4, #map5, #map5]}
+  %6:3 = iree_linalg_ext.online_attention <indexing_maps = [#map, #map1, #map2, #map3, #map4, #map5, #map5]>
     ins(%query, %key, %value, %scale : tensor<?x?x?xf32>, tensor<?x?x?xf32>, tensor<?x?x?xf32>, f32)
     outs(%3, %4, %5 : tensor<?x?x?xf32>, tensor<?x?xf32>, tensor<?x?xf32>) {
      ^bb0(%score: f32):
@@ -1821,7 +1867,7 @@ func.func @gather(%source: tensor<16x8x32x128xf16>, %indices: tensor<4xi64>, %ou
 // reduction iter dim to 1. Distribution is parallel-only (M, N).
 #executable_target_embedded_elf_x86_64_ = #hal.executable.target<"llvm-cpu", "embedded-elf-x86_64", {cpu_features = "+avx512f", data_layout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-f80:128-n8:16:32:64-S128", native_vector_size = 64 : index, target_triple = "x86_64-unknown-unknown-eabi-elf"}>
 func.func @inner_tiled_avx512_1x16x1_f32(%lhs: tensor<2x4x2x1xf32>, %rhs: tensor<2x4x2x16xf32>, %acc: tensor<2x2x2x2x16xf32>) -> tensor<2x2x2x2x16xf32> attributes {hal.executable.target = #executable_target_embedded_elf_x86_64_} {
-  %0 = iree_codegen.inner_tiled ins(%lhs, %rhs) outs(%acc) {
+  %0 = iree_codegen.inner_tiled ins(%lhs, %rhs) outs(%acc) <
     indexing_maps = [
       affine_map<(d0, d1, d2) -> (d0, d2)>,
       affine_map<(d0, d1, d2) -> (d1, d2)>,
@@ -1832,7 +1878,7 @@ func.func @inner_tiled_avx512_1x16x1_f32(%lhs: tensor<2x4x2x1xf32>, %rhs: tensor
                       #linalg.iterator_type<reduction>],
     kind = #iree_cpu.data_tiled_mma_layout<intrinsic = MMA_X86_AVX512_1x16x1_F32_F32, intrinsics_m = 2, intrinsics_n = 2>,
     semantics = #iree_cpu.mma_semantics<>
-  } : tensor<2x4x2x1xf32>, tensor<2x4x2x16xf32> into tensor<2x2x2x2x16xf32>
+  > : tensor<2x4x2x1xf32>, tensor<2x4x2x16xf32> into tensor<2x2x2x2x16xf32>
   return %0 : tensor<2x2x2x2x16xf32>
 }
 //   CHECK-DAG: #[[INNER_TILED_CONFIG:.+]] = #iree_cpu.lowering_config<distribution = [1, 1, 0], vector_common_parallel = [1, 1, 0], vector_reduction = [0, 0, 1]>

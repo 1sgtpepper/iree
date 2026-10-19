@@ -36,7 +36,7 @@ func.func @matmul_256x256x256_f16_f32() attributes {hal.executable.target = #exe
 //          CHECK:   scf.for {{.*}} = %c0 to %c256 step %c128 iter_args({{.*}}) -> (vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>)
 // Each subgroup handles 2 * 2 tiles, and for each tile we accumulate 8 times
 // along the K dimension. So in total 32 mfma ops.
-// CHECK-COUNT-32:     amdgpu.mfma 16x16x16 {{.*}} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+// CHECK-COUNT-32:     amdgpu.mfma 16x16x16 {{.*}} : vector<4xf16>, vector<4xf16>, vector<4xf32>
 //          CHECK:     scf.yield
 //  CHECK-COUNT-4:   vector.transfer_write {{.+}} {in_bounds = [true, true]} : vector<4x1xf32>, memref<256x256xf32, #amdgpu.address_space<fat_raw_buffer>>
 //          CHECK:   iree_codegen.dispatch_config @matmul_256x256x256_f16_f32 workgroup_size = [256, 1, 1] subgroup_size = 64
@@ -69,7 +69,7 @@ func.func @matmul_256x256x256_f16_f32() attributes {hal.executable.target = #exe
 
 //    CHECK-LABEL: func.func @matmul_256x256x256_f16_f32()
 //          CHECK:   scf.for {{.*}} = %c0 to %c256 step %c128 iter_args({{.*}}) -> (vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>)
-// CHECK-COUNT-32:     amdgpu.mfma 16x16x16 {{.*}} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+// CHECK-COUNT-32:     amdgpu.mfma 16x16x16 {{.*}} : vector<4xf16>, vector<4xf16>, vector<4xf32>
 //          CHECK:     scf.yield
 //  CHECK-COUNT-4:   vector.transfer_write {{.+}} {in_bounds = [true, true]} : vector<4x1xf32>, memref<256x256xf32, #amdgpu.address_space<fat_raw_buffer>>
 //          CHECK:   iree_codegen.dispatch_config @matmul_256x256x256_f16_f32 workgroup_size = [256, 1, 1] subgroup_size = 64
@@ -126,7 +126,7 @@ func.func @expanded_matmul_transpose_b() attributes {hal.executable.target = #ex
 // This has more than 2 iterations. So we have prefetching enabled for this case. Due to
 // prefetching, we have one iteration peeled of so upper bound is 2048 - 128 = 1920.
 //          CHECK:   scf.for {{.*}} = %c0 to %c1920 step %c128 iter_args({{.*}}) -> (vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>)
-// CHECK-COUNT-32:     amdgpu.mfma 16x16x16 {{.*}} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+// CHECK-COUNT-32:     amdgpu.mfma 16x16x16 {{.*}} : vector<4xf16>, vector<4xf16>, vector<4xf32>
 //          CHECK:     scf.yield
 // CHECK-COUNT-32:   amdgpu.mfma
 //  CHECK-COUNT-4:   vector.transfer_write {{.+}} {in_bounds = [true, true, true, true]} : vector<1x1x4x1xf32>, memref<2x10x64x64xf32, #amdgpu.address_space<fat_raw_buffer>>
@@ -206,7 +206,7 @@ func.func @matmul_256x256x256_16x16x32_f8_f32() attributes {hal.executable.targe
 //    CHECK-LABEL: func.func @matmul_256x256x256_16x16x32_f8_f32()
 // Each subgroup handles 2 * 2 tiles, and for each tile we accumulate 8 times
 // along the K dimension. So in total 32 mfma ops.
-// CHECK-COUNT-32:     amdgpu.mfma 16x16x32 {{.*}} blgp =  none : vector<8xf8E4M3FNUZ>, vector<8xf8E4M3FNUZ>, vector<4xf32>
+// CHECK-COUNT-32:     amdgpu.mfma 16x16x32 {{.*}} : vector<8xf8E4M3FNUZ>, vector<8xf8E4M3FNUZ>, vector<4xf32>
 //  CHECK-COUNT-4:   vector.transfer_write {{.+}} {in_bounds = [true, true]} : vector<4x1xf32>, memref<256x256xf32, #amdgpu.address_space<fat_raw_buffer>>
 //          CHECK:   iree_codegen.dispatch_config @matmul_256x256x256_16x16x32_f8_f32 workgroup_size = [256, 1, 1] subgroup_size = 64
 
@@ -243,7 +243,7 @@ func.func @matmul_256x256x256_i8_i32() attributes {hal.executable.target = #exec
 //    CHECK-LABEL: func.func @matmul_256x256x256_i8_i32()
 // Each subgroup handles 2 * 2 tiles, and for each tile we accumulate 8 times
 // along the K dimension. So in total 32 mfma ops.
-// CHECK-COUNT-32:     amdgpu.mfma 16x16x32 {{.*}} blgp =  none : vector<8xi8>, vector<8xi8>, vector<4xi32>
+// CHECK-COUNT-32:     amdgpu.mfma 16x16x32 {{.*}} : vector<8xi8>, vector<8xi8>, vector<4xi32>
 //  CHECK-COUNT-4:   vector.transfer_write {{.+}} {in_bounds = [true, true]} : vector<4x1xi32>, memref<256x256xi32, #amdgpu.address_space<fat_raw_buffer>>
 //          CHECK:   iree_codegen.dispatch_config @matmul_256x256x256_i8_i32 workgroup_size = [256, 1, 1] subgroup_size = 64
 
@@ -280,7 +280,7 @@ func.func @matmul_256x256x256_32x32x16_f8_f32() attributes {hal.executable.targe
 //    CHECK-LABEL: func.func @matmul_256x256x256_32x32x16_f8_f32()
 // Each subgroup handles 1 * 1 tiles, and for each tile we accumulate (256/16) = 16 times
 // along the K dimension. So in total 16 mfma ops.
-//  CHECK-COUNT-16:     amdgpu.mfma 32x32x16 {{.*}} blgp =  none : vector<8xf8E4M3FNUZ>, vector<8xf8E4M3FNUZ>, vector<16xf32>
+//  CHECK-COUNT-16:     amdgpu.mfma 32x32x16 {{.*}} : vector<8xf8E4M3FNUZ>, vector<8xf8E4M3FNUZ>, vector<16xf32>
 //  CHECK-COUNT-4:   vector.transfer_write {{.+}} {in_bounds = [true, true]} : vector<4x1xf32>, memref<256x256xf32, #amdgpu.address_space<fat_raw_buffer>>
 //          CHECK:   iree_codegen.dispatch_config @matmul_256x256x256_32x32x16_f8_f32 workgroup_size = [256, 1, 1] subgroup_size = 64
 
@@ -324,7 +324,7 @@ func.func @matmul_transpose_b_256x256x256_i8_i32() attributes {hal.executable.ta
 //    CHECK-LABEL: func.func @matmul_transpose_b_256x256x256_i8_i32()
 // Each subgroup handles 2 * 2 tiles, and for each tile we accumulate 8 times
 // along the K dimension. So in total 32 mfma ops.
-// CHECK-COUNT-32:     amdgpu.mfma 16x16x32 {{.*}} blgp =  none : vector<8xi8>, vector<8xi8>, vector<4xi32>
+// CHECK-COUNT-32:     amdgpu.mfma 16x16x32 {{.*}} : vector<8xi8>, vector<8xi8>, vector<4xi32>
 //  CHECK-COUNT-4:   vector.transfer_write {{.+}} {in_bounds = [true, true]} : vector<4x1xi32>, memref<256x256xi32, #amdgpu.address_space<fat_raw_buffer>>
 //          CHECK:   iree_codegen.dispatch_config @matmul_transpose_b_256x256x256_i8_i32 workgroup_size = [256, 1, 1] subgroup_size = 64
 
@@ -356,7 +356,7 @@ func.func @conv_nhwc() attributes {hal.executable.target = #executable_target_ro
 
 //    CHECK-LABEL: func.func @conv_nhwc
 //          CHECK:   scf.for {{.*}} = %c0 to %c215 step %c1 iter_args({{.*}}) -> (vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>)
-// CHECK-COUNT-16:     amdgpu.mfma 16x16x16 {{.*}} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+// CHECK-COUNT-16:     amdgpu.mfma 16x16x16 {{.*}} : vector<4xf16>, vector<4xf16>, vector<4xf32>
 //          CHECK:     scf.yield
 // CHECK-COUNT-16:   amdgpu.mfma
 //  CHECK-COUNT-8:   vector.transfer_write {{.+}} {in_bounds = [true, true, true, true]} : vector<1x1x4x1xf32>, memref<2x256x512x256xf32, #amdgpu.address_space<fat_raw_buffer>>
@@ -412,7 +412,7 @@ func.func @generic_2x1024x20x64x1280_f16() attributes {hal.executable.target = #
 //          CHECK:   scf.for {{.*}} = %c0 to %c1152 step %c128 iter_args({{.*}}) -> (vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>)
 // Each subgroup handles 2 * 2 tiles, and for each tile we accumulate 8 times
 // along the K dimension. So in total 32 mfma ops.
-// CHECK-COUNT-32:     amdgpu.mfma 16x16x16 {{.*}} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+// CHECK-COUNT-32:     amdgpu.mfma 16x16x16 {{.*}} : vector<4xf16>, vector<4xf16>, vector<4xf32>
 //          CHECK:     scf.yield
 // CHECK-COUNT-32:   amdgpu.mfma
 //  CHECK-COUNT-4:   vector.transfer_write {{.+}} {in_bounds = [true, true, true, true]} : vector<1x4x1x1xf32>, memref<2x1024x20x64xf32, #amdgpu.address_space<fat_raw_buffer>>
@@ -463,7 +463,7 @@ func.func @contract_schedule_considering_read_layout() attributes {hal.executabl
 // CHECK-DAG:     %[[LHS_SHARED:.+]] = memref.alloc() : memref<1x16x132xf16, #gpu.address_space<workgroup>>
 // CHECK-DAG:     memref.subview %[[LHS_SHARED]][0, 0, 0] [1, 16, 128] [1, 1, 1]
 // CHECK:   scf.for {{.*}} = %c0 to %c1408 step %c128 iter_args({{.*}}) -> (vector<4xf32>, vector<4xf32>)
-// CHECK-COUNT-16:     amdgpu.mfma 16x16x16 {{.*}} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+// CHECK-COUNT-16:     amdgpu.mfma 16x16x16 {{.*}} : vector<4xf16>, vector<4xf16>, vector<4xf32>
 // CHECK:     scf.yield
 // CHECK-COUNT-16:   amdgpu.mfma
 // CHECK:   iree_codegen.dispatch_config @contract_schedule_considering_read_layout workgroup_size = [256, 1, 1] subgroup_size = 64
@@ -504,13 +504,13 @@ func.func @virtual_intrinsic_256x256x256_16x16x32xf8E4M3FNUZ_f32() attributes {h
 
 // CHECK:       %[[A_CAST:.+]] = vector.shape_cast %{{.+}} : vector<1x8xf16> to vector<8xf16>
 // CHECK:       %[[B_CAST:.+]] = vector.shape_cast %{{.+}} : vector<1x8xf16> to vector<8xf16>
-// CHECK:       %[[A_SLICE_0:.+]] = vector.extract_strided_slice %[[A_CAST]] {offsets = [0], sizes = [4], strides = [1]} : vector<8xf16> to vector<4xf16>
-// CHECK:       %[[B_SLICE_0:.+]] = vector.extract_strided_slice %[[B_CAST]] {offsets = [0], sizes = [4], strides = [1]} : vector<8xf16> to vector<4xf16>
-// CHECK:       %[[MFMA_0:.*]] = amdgpu.mfma 32x32x8 %[[A_SLICE_0]] * %[[B_SLICE_0]] + %[[ACC]] blgp =  none
+// CHECK:       %[[A_SLICE_0:.+]] = vector.extract_strided_slice %[[A_CAST]] offsets = [0], sizes = [4], strides = [1] : vector<8xf16> to vector<4xf16>
+// CHECK:       %[[B_SLICE_0:.+]] = vector.extract_strided_slice %[[B_CAST]] offsets = [0], sizes = [4], strides = [1] : vector<8xf16> to vector<4xf16>
+// CHECK:       %[[MFMA_0:.*]] = amdgpu.mfma 32x32x8 %[[A_SLICE_0]] * %[[B_SLICE_0]] + %[[ACC]]
 // CHECK-SAME:     : vector<4xf16>, vector<4xf16>, vector<16xf32>
-// CHECK:       %[[A_SLICE_1:.+]] = vector.extract_strided_slice %[[A_CAST]] {offsets = [4], sizes = [4], strides = [1]} : vector<8xf16> to vector<4xf16>
-// CHECK:       %[[B_SLICE_1:.+]] = vector.extract_strided_slice %[[B_CAST]] {offsets = [4], sizes = [4], strides = [1]} : vector<8xf16> to vector<4xf16>
-// CHECK:       amdgpu.mfma 32x32x8 %[[A_SLICE_1]] * %[[B_SLICE_1]] + %[[MFMA_0]] blgp =  none
+// CHECK:       %[[A_SLICE_1:.+]] = vector.extract_strided_slice %[[A_CAST]] offsets = [4], sizes = [4], strides = [1] : vector<8xf16> to vector<4xf16>
+// CHECK:       %[[B_SLICE_1:.+]] = vector.extract_strided_slice %[[B_CAST]] offsets = [4], sizes = [4], strides = [1] : vector<8xf16> to vector<4xf16>
+// CHECK:       amdgpu.mfma 32x32x8 %[[A_SLICE_1]] * %[[B_SLICE_1]] + %[[MFMA_0]]
 // CHECK-SAME:     : vector<4xf16>, vector<4xf16>, vector<16xf32>
 
 // Ensure right number of instructions are being generated.
@@ -555,7 +555,7 @@ func.func @virtual_intrinsic_256x256x256_32x32x16_f8E4M3FNUZ_f32() attributes {h
 //          CHECK:   scf.for {{.*}} = %c0 to %c256 step %c128 iter_args({{.*}}) -> (vector<16xf32>)
 // Each subgroup handles 1 * 1 tiles, and for each tile we accumulate (128 / 16) = 8 times
 // along the K dimension. So in total 8 mfma ops.
-// CHECK-COUNT-8:     amdgpu.mfma 32x32x16 {{.*}} blgp =  none : vector<8xf8E4M3FNUZ>, vector<8xf8E4M3FNUZ>, vector<16xf32>
+// CHECK-COUNT-8:     amdgpu.mfma 32x32x16 {{.*}} : vector<8xf8E4M3FNUZ>, vector<8xf8E4M3FNUZ>, vector<16xf32>
 //          CHECK:     scf.yield
 //  CHECK-COUNT-4:   vector.transfer_write {{.+}} {in_bounds = [true, true]} : vector<4x1xf32>, memref<256x256xf32, #amdgpu.address_space<fat_raw_buffer>>
 //          CHECK:   iree_codegen.dispatch_config @virtual_intrinsic_256x256x256_32x32x16_f8E4M3FNUZ_f32 workgroup_size = [256, 1, 1] subgroup_size = 64
@@ -614,8 +614,7 @@ func.func @virtual_intrinsic_256x256x256_16x16x32xf8E4M3FNUZ_f32() attributes {h
 
 // CHECK:       %[[LHS_CAST:.+]] = vector.shape_cast %[[EXTRACT_LHS]] : vector<1x8xf8E4M3FNUZ> to vector<8xf8E4M3FNUZ>
 // CHECK:       %[[RHS_CAST:.+]] = vector.shape_cast %[[EXTRACT_RHS]] : vector<1x8xf8E4M3FNUZ> to vector<8xf8E4M3FNUZ>
-// CHECK:       amdgpu.mfma 16x16x32 %[[LHS_CAST]] * %[[RHS_CAST]] + %{{.*}} blgp = none
-// CHECK-SAME:     : vector<8xf8E4M3FNUZ>, vector<8xf8E4M3FNUZ>, vector<4xf32>
+// CHECK:       amdgpu.mfma 16x16x32 %[[LHS_CAST]] * %[[RHS_CAST]] + %{{.*}} : vector<8xf8E4M3FNUZ>, vector<8xf8E4M3FNUZ>, vector<4xf32>
 
 // Ensure right number of instructions are being generated.
 // CHECK-COUNT-3: amdgpu.mfma
@@ -709,18 +708,16 @@ func.func @attention_20x4096x64x4096x64() attributes {hal.executable.target = #e
   %6 = iree_tensor_ext.dispatch.tensor.load %2, offsets = [0, 0, 0], sizes = [20, 4096, 64], strides = [1, 1, 1] : !iree_tensor_ext.dispatch.tensor<readonly:tensor<20x4096x64xf16>> -> tensor<20x4096x64xf16>
   %7 = tensor.empty() : tensor<20x4096x64xf32>
   %8 = tensor.empty() : tensor<20x4096xf32>
-  %9:3 = iree_linalg_ext.online_attention  {indexing_maps = [affine_map<(d0, d1, d2, d3, d4) -> (d0, d1, d2)>,
+  %9:3 = iree_linalg_ext.online_attention  <indexing_maps = [affine_map<(d0, d1, d2, d3, d4) -> (d0, d1, d2)>,
                affine_map<(d0, d1, d2, d3, d4) -> (d0, d3, d2)>,
                affine_map<(d0, d1, d2, d3, d4) -> (d0, d3, d4)>,
                affine_map<(d0, d1, d2, d3, d4) -> ()>,
                affine_map<(d0, d1, d2, d3, d4) -> (d0, d1, d4)>,
                affine_map<(d0, d1, d2, d3, d4) -> (d0, d1)>,
-               affine_map<(d0, d1, d2, d3, d4) -> (d0, d1)>],
-               lowering_config = #config,
-               decomposition_config = {
+               affine_map<(d0, d1, d2, d3, d4) -> (d0, d1)>], decomposition_config = {
                 qk_attrs = {lowering_config = #iree_gpu.lowering_config<{mma_kind = #iree_gpu.mma_layout<MFMA_F32_16x16x16_F16, col_major = true>, subgroup_basis = [[1, 2, 1, 1, 1], [0, 1, 2, 3]], promote_operands = [0, 1]}>},
                 pv_attrs = {lowering_config = #iree_gpu.lowering_config<{mma_kind = #iree_gpu.mma_layout<MFMA_F32_16x16x16_F16, col_major = true>, subgroup_basis = [[1, 2, 1, 1, 1], [0, 1, 3, 4]], promote_operands = [1]}>}
-               }}
+               }> {lowering_config = #config}
                ins(%4, %5, %6, %cst : tensor<20x4096x64xf16>, tensor<20x4096x64xf16>, tensor<20x4096x64xf16>, f16) outs(%7, %8, %8 : tensor<20x4096x64xf32>, tensor<20x4096xf32>, tensor<20x4096xf32>) {
                 ^bb0(%score: f32):
                   iree_linalg_ext.yield %score : f32
@@ -740,7 +737,7 @@ func.func @attention_20x4096x64x4096x64() attributes {hal.executable.target = #e
 // CHECK: transfer_read
 
 // CHECK: scf.for %{{.*}} = %c0 to %c4096 step %c64
-// CHECK-COUNT-48:  amdgpu.mfma 16x16x16 {{.*}} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+// CHECK-COUNT-48:  amdgpu.mfma 16x16x16 {{.*}} : vector<4xf16>, vector<4xf16>, vector<4xf32>
 // CHECK: scf.yield
 // CHECK: iree_codegen.dispatch_config @attention_20x4096x64x4096x64 workgroup_size = [128, 1, 1] subgroup_size = 64
 
@@ -775,18 +772,16 @@ func.func @attention_multiple_m_transpose() attributes {hal.executable.target = 
   %7 = tensor.empty() : tensor<64x4608x24x128xf32>
   %8 = tensor.empty() : tensor<24x64x4608x128xf32>
   %9 = tensor.empty() : tensor<24x64x4608xf32>
-  %10:3 = iree_linalg_ext.online_attention {indexing_maps = [affine_map<(d0, d1, d2, d3, d4, d5) -> (d0, d1, d2, d3)>,
+  %10:3 = iree_linalg_ext.online_attention <indexing_maps = [affine_map<(d0, d1, d2, d3, d4, d5) -> (d0, d1, d2, d3)>,
                                                    affine_map<(d0, d1, d2, d3, d4, d5) -> (d0, d4, d3)>,
                                                    affine_map<(d0, d1, d2, d3, d4, d5) -> (d0, d4, d5)>,
                                                    affine_map<(d0, d1, d2, d3, d4, d5) -> ()>,
                                                    affine_map<(d0, d1, d2, d3, d4, d5) -> (d0, d1, d2, d5)>,
                                                    affine_map<(d0, d1, d2, d3, d4, d5) -> (d0, d1, d2)>,
-                                                   affine_map<(d0, d1, d2, d3, d4, d5) -> (d0, d1, d2)>],
-                                                   lowering_config = #config,
-                                                   decomposition_config = {
+                                                   affine_map<(d0, d1, d2, d3, d4, d5) -> (d0, d1, d2)>], decomposition_config = {
                                                     qk_attrs = {lowering_config = #iree_gpu.lowering_config<{mma_kind = #iree_gpu.mma_layout<MFMA_F32_16x16x16_F16, col_major = true>, subgroup_basis = [[1, 1, 2, 1, 1, 1], [0, 1, 2, 3, 4]], promote_operands = [0, 1]}>},
                                                     pv_attrs = {lowering_config = #iree_gpu.lowering_config<{mma_kind = #iree_gpu.mma_layout<MFMA_F32_16x16x16_F16, col_major = true>, subgroup_basis = [[1, 1, 2, 1, 1, 1], [0, 1, 2, 4, 5]], promote_operands = [1]}>}
-                                                   }}
+                                                   }> {lowering_config = #config}
   ins(%4, %5, %6, %cst : tensor<24x64x4608x128xf16>, tensor<24x4608x128xf16>, tensor<24x4608x128xf16>, f16) outs(%8, %9, %9 : tensor<24x64x4608x128xf32>, tensor<24x64x4608xf32>, tensor<24x64x4608xf32>) {
         ^bb0(%score: f32):
           iree_linalg_ext.yield %score : f32
@@ -801,7 +796,7 @@ func.func @attention_multiple_m_transpose() attributes {hal.executable.target = 
 
 // CHECK-LABEL: func.func @attention_multiple_m_transpose()
 // CHECK: scf.for %{{.*}} = %c0 to %c4608 step %c64
-// CHECK-COUNT-96:  amdgpu.mfma 16x16x16 {{.*}}blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+// CHECK-COUNT-96:  amdgpu.mfma 16x16x16 {{.*}} : vector<4xf16>, vector<4xf16>, vector<4xf32>
 // CHECK: scf.yield
 // CHECK: iree_codegen.dispatch_config @attention_multiple_m_transpose workgroup_size = [128, 1, 1] subgroup_size = 64
 
@@ -836,18 +831,16 @@ func.func @attention_mfma_32x32x8() attributes {hal.executable.target = #executa
   %7 = tensor.empty() : tensor<64x4608x24x128xf32>
   %8 = tensor.empty() : tensor<24x64x4608x128xf32>
   %9 = tensor.empty() : tensor<24x64x4608xf32>
-  %10:3 = iree_linalg_ext.online_attention {indexing_maps = [affine_map<(d0, d1, d2, d3, d4, d5) -> (d0, d1, d2, d3)>,
+  %10:3 = iree_linalg_ext.online_attention <indexing_maps = [affine_map<(d0, d1, d2, d3, d4, d5) -> (d0, d1, d2, d3)>,
                                                    affine_map<(d0, d1, d2, d3, d4, d5) -> (d0, d4, d3)>,
                                                    affine_map<(d0, d1, d2, d3, d4, d5) -> (d0, d4, d5)>,
                                                    affine_map<(d0, d1, d2, d3, d4, d5) -> ()>,
                                                    affine_map<(d0, d1, d2, d3, d4, d5) -> (d0, d1, d2, d5)>,
                                                    affine_map<(d0, d1, d2, d3, d4, d5) -> (d0, d1, d2)>,
-                                                   affine_map<(d0, d1, d2, d3, d4, d5) -> (d0, d1, d2)>],
-                                                   lowering_config = #config,
-                                                   decomposition_config = {
+                                                   affine_map<(d0, d1, d2, d3, d4, d5) -> (d0, d1, d2)>], decomposition_config = {
                                                     qk_attrs = {lowering_config = #iree_gpu.lowering_config<{mma_kind = #iree_gpu.mma_layout<MFMA_F32_32x32x8_F16, col_major = true>, subgroup_basis = [[1, 1, 4, 1, 1, 1], [0, 1, 2, 3, 4]], promote_operands = [0, 1]}>},
                                                     pv_attrs = {lowering_config = #iree_gpu.lowering_config<{mma_kind = #iree_gpu.mma_layout<MFMA_F32_32x32x8_F16, col_major = true>, subgroup_basis = [[1, 1, 4, 1, 1, 1], [0, 1, 2, 4, 5]], promote_operands = [1]}>}
-                                                   }}
+                                                   }> {lowering_config = #config}
   ins(%4, %5, %6, %cst : tensor<24x64x4608x128xf16>, tensor<24x4608x128xf16>, tensor<24x4608x128xf16>, f16) outs(%8, %9, %9 : tensor<24x64x4608x128xf32>, tensor<24x64x4608xf32>, tensor<24x64x4608xf32>) {
         ^bb0(%score: f32):
           iree_linalg_ext.yield %score : f32
@@ -862,7 +855,7 @@ func.func @attention_mfma_32x32x8() attributes {hal.executable.target = #executa
 
 // CHECK-LABEL: func.func @attention_mfma_32x32x8()
 // CHECK: scf.for %{{.*}} = %c0 to %c4608 step %c32
-// CHECK-COUNT-24:  amdgpu.mfma 32x32x8 {{.*}} blgp =  none : vector<4xf16>, vector<4xf16>, vector<16xf32>
+// CHECK-COUNT-24:  amdgpu.mfma 32x32x8 {{.*}} : vector<4xf16>, vector<4xf16>, vector<16xf32>
 // CHECK: scf.yield
 // CHECK: iree_codegen.dispatch_config @attention_mfma_32x32x8 workgroup_size = [256, 1, 1] subgroup_size = 64
 
@@ -907,18 +900,16 @@ func.func @online_attention_split_k2() attributes {hal.executable.target = #exec
   %empty_o = tensor.empty() : !O_SK
   %empty_rowmax = tensor.empty() : !ROWRED_SK
   %empty_rowsum = tensor.empty() : !ROWRED_SK
-  %out:3 = iree_linalg_ext.online_attention {indexing_maps = [affine_map<(b1, b2, m, n, k1, k2) -> (b1, m, k1)>,
+  %out:3 = iree_linalg_ext.online_attention <indexing_maps = [affine_map<(b1, b2, m, n, k1, k2) -> (b1, m, k1)>,
                                                               affine_map<(b1, b2, m, n, k1, k2) -> (b1, b2, k2, k1)>,
                                                               affine_map<(b1, b2, m, n, k1, k2) -> (b1, b2, k2, n)>,
                                                               affine_map<(b1, b2, m, n, k1, k2) -> ()>,
                                                               affine_map<(b1, b2, m, n, k1, k2) -> (b1, b2, m, n)>,
                                                               affine_map<(b1, b2, m, n, k1, k2) -> (b1, b2, m)>,
-                                                              affine_map<(b1, b2, m, n, k1, k2) -> (b1, b2, m)>],
-                                                            lowering_config = #config,
-                                                            decomposition_config = {
+                                                              affine_map<(b1, b2, m, n, k1, k2) -> (b1, b2, m)>], decomposition_config = {
                                                               qk_attrs = {lowering_config = #iree_gpu.lowering_config<{mma_kind = #iree_gpu.mma_layout<MFMA_F32_16x16x16_F16, col_major = true>, subgroup_basis = [[1, 1, 1, 1, 1, 1], [0, 1, 2, 4, 5]], promote_operands = [0, 1]}>},
                                                               pv_attrs = {lowering_config = #iree_gpu.lowering_config<{mma_kind = #iree_gpu.mma_layout<MFMA_F32_16x16x16_F16, col_major = true>, subgroup_basis = [[1, 1, 1, 1, 1, 1], [0, 1, 2, 3, 5]], promote_operands = [1]}>}
-                                                            }}
+                                                            }> {lowering_config = #config}
   ins(%4, %5, %6, %cst : !Q, !K_SK, !V_SK, f16) outs(%empty_o, %empty_rowmax, %empty_rowsum: !O_SK, !ROWRED_SK, !ROWRED_SK) {
         ^bb0(%score: f32):
           iree_linalg_ext.yield %score : f32
@@ -932,7 +923,7 @@ func.func @online_attention_split_k2() attributes {hal.executable.target = #exec
 // CHECK-LABEL: func.func @online_attention_split_k2()
 // CHECK: scf.for %{{.*}} = %c0 to %c256 step %c32
 // CHECK-SAME: -> (vector<1x1x1x4x1x1x1x1x1x1x1x4xf32>, vector<1x1x1x1x1x1x1x1x1xf32>, vector<1x1x1x1x1x1x1x1x1xf32>)
-// CHECK-COUNT-16:  amdgpu.mfma 16x16x16 {{.*}} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+// CHECK-COUNT-16:  amdgpu.mfma 16x16x16 {{.*}} : vector<4xf16>, vector<4xf16>, vector<4xf32>
 // CHECK: scf.yield
 // CHECK: iree_codegen.dispatch_config @online_attention_split_k2 workgroup_size = [64, 1, 1] subgroup_size = 64
 
@@ -982,12 +973,9 @@ func.func @attention_gather_k() attributes {hal.executable.target = #executable_
   } -> tensor<2x10x4096x64xf16>
   %11 = tensor.empty() : tensor<2x10x4096x64xf32>
   %12 = tensor.empty() : tensor<2x10x4096xf32>
-  %13:3 = iree_linalg_ext.online_attention {
-      indexing_maps = [#map1, #map2, #map3, #map4, #map5,
+  %13:3 = iree_linalg_ext.online_attention <indexing_maps = [#map1, #map2, #map3, #map4, #map5,
                        affine_map<(d0, d1, d2, d3, d4, d5) -> (d0, d1, d2)>,
-                       affine_map<(d0, d1, d2, d3, d4, d5) -> (d0, d1, d2)>],
-      decomposition_config = { qk_attrs = #qk_config, pv_attrs = #pv_config },
-      lowering_config = #config} ins(%7, %10, %8, %cst : tensor<2x10x4096x64xf16>, tensor<2x10x4096x64xf16>, tensor<2x10x4096x64xf16>, f16) outs(%11, %12, %12 : tensor<2x10x4096x64xf32>, tensor<2x10x4096xf32>, tensor<2x10x4096xf32>) {
+                       affine_map<(d0, d1, d2, d3, d4, d5) -> (d0, d1, d2)>], decomposition_config = { qk_attrs = #qk_config, pv_attrs = #pv_config }> {lowering_config = #config} ins(%7, %10, %8, %cst : tensor<2x10x4096x64xf16>, tensor<2x10x4096x64xf16>, tensor<2x10x4096x64xf16>, f16) outs(%11, %12, %12 : tensor<2x10x4096x64xf32>, tensor<2x10x4096xf32>, tensor<2x10x4096xf32>) {
   ^bb0(%arg0: f32):
     iree_linalg_ext.yield %arg0 : f32
   } -> tensor<2x10x4096x64xf32>, tensor<2x10x4096xf32>, tensor<2x10x4096xf32>
@@ -1079,7 +1067,7 @@ func.func @matmul_map_store() attributes {hal.executable.target = #executable_ta
 //          CHECK:   %[[OUTPUT_BINDING_ALIGNED:.+]] = memref.assume_alignment %[[OUTPUT_BINDING]]
 //          CHECK:   %[[OUTPUT_BUFFER:.+]] = amdgpu.fat_raw_buffer_cast %[[OUTPUT_BINDING_ALIGNED]]
 //          CHECK:   %[[FOR_RESULT:.+]]:4 = scf.for {{.*}} = %c0 to %c256 step %c128 iter_args({{.*}}) -> (vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>)
-// CHECK-COUNT-32:     amdgpu.mfma 16x16x16 {{.*}} blgp =  none : vector<4xf16>, vector<4xf16>, vector<4xf32>
+// CHECK-COUNT-32:     amdgpu.mfma 16x16x16 {{.*}} : vector<4xf16>, vector<4xf16>, vector<4xf32>
 //          CHECK:   %[[FLAT_OUTPUT_BUFFER:.+]] = memref.collapse_shape %[[OUTPUT_BUFFER]]
 //  CHECK-COUNT-4:   vector.scatter %[[FLAT_OUTPUT_BUFFER]]{{.*}} : memref<65536xf32, #amdgpu.address_space<fat_raw_buffer>>, vector<4xindex>, vector<4xi1>, vector<4xf32>
 //          CHECK:   iree_codegen.dispatch_config @matmul_map_store workgroup_size = [256, 1, 1] subgroup_size = 64

@@ -16,6 +16,7 @@
 #include "mlir/Dialect/Affine/Utils.h"
 #include "mlir/Dialect/Arith/Utils/Utils.h"
 #include "mlir/Dialect/Linalg/IR/Linalg.h"
+#include "mlir/Dialect/Linalg/Transforms/Transforms.h"
 #include "mlir/Dialect/Linalg/Utils/Utils.h"
 #include "mlir/Dialect/Math/IR/Math.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
@@ -153,7 +154,7 @@ static Value reduce(OpBuilder &builder, Location loc, AffineMap inputMap,
 
 static Value computeMatmul(OpBuilder &builder, Location loc, AffineMap lhsMap,
                            AffineMap rhsMap, AffineMap accMap, Value lhs,
-                           Value rhs, Value acc) {
+                           Value rhs, Value acc, bool specialize = false) {
 
   SmallVector<AffineMap> compressedMaps =
       compressUnusedDims(SmallVector<AffineMap>{lhsMap, rhsMap, accMap});
@@ -182,6 +183,19 @@ static Value computeMatmul(OpBuilder &builder, Location loc, AffineMap lhsMap,
         Value add = arith::AddFOp::create(b, loc, mul, args[2]);
         linalg::YieldOp::create(b, loc, add);
       });
+
+  if (specialize) {
+    // Try to specialize the generic into a named op (e.g. batch_matmul).
+    // Named ops prevent BubbleUpExpandShapes from propagating reshapes through
+    // contractions, preserving codegen-friendly structure for microkernels.
+    IRRewriter rewriter(builder);
+    rewriter.setInsertionPoint(genericOp);
+    FailureOr<linalg::LinalgOp> specializedOp =
+        linalg::specializeGenericOp(rewriter, genericOp);
+    if (succeeded(specializedOp)) {
+      return specializedOp->getOperation()->getResult(0);
+    }
+  }
 
   return genericOp.getResult(0);
 }
@@ -313,7 +327,7 @@ Value computeQKAndElementwise(Location loc, OpBuilder &b, Value query,
                               SmallVector<OpFoldResult> iterationDomain,
                               Type sElementType, Region &elementwiseRegion,
                               DictionaryAttr qkAttrs, bool lowPrecision,
-                              bool useExp2) {
+                              bool useExp2, bool specialize = false) {
   MLIRContext *ctx = b.getContext();
   // If using exp2 for attention instead of the original exp, we have to
   // multiply the scale by log2(e). We use exp2 instead of exp as most platforms
@@ -358,7 +372,7 @@ Value computeQKAndElementwise(Location loc, OpBuilder &b, Value query,
   Value sZero = arith::ConstantOp::create(b, loc, b.getZeroAttr(sElementType));
   Value s = linalg::FillOp::create(b, loc, sZero, emptyS).getResult(0);
 
-  s = computeMatmul(b, loc, qMap, kMap, sMap, query, key, s);
+  s = computeMatmul(b, loc, qMap, kMap, sMap, query, key, s, specialize);
   if (qkAttrs) {
     s.getDefiningOp()->setAttrs(qkAttrs);
   }
@@ -437,7 +451,8 @@ FailureOr<SmallVector<Value>> AttentionOp::decomposeOperation(OpBuilder &b) {
   // ---- QK Matmul + elementwise math ----
   Value s = computeQKAndElementwise(
       loc, b, query, key, getScale(), mask, qMap, kMap, sMap, getMaskMap(),
-      sizes, f32Type, getRegion(), qkAttrs, lowPrecision, /*useExp2=*/true);
+      sizes, f32Type, getRegion(), qkAttrs, lowPrecision, /*useExp2=*/true,
+      /*specialize=*/true);
 
   // ---- Softmax ----
 
@@ -502,8 +517,8 @@ FailureOr<SmallVector<Value>> AttentionOp::decomposeOperation(OpBuilder &b) {
   }
 
   // result = P @ V + acc
-  Value result =
-      computeMatmul(b, loc, pMap, getValueMap(), accMap, p, value, accFill);
+  Value result = computeMatmul(b, loc, pMap, getValueMap(), accMap, p, value,
+                               accFill, /*specialize=*/true);
   if (pvAttrs) {
     result.getDefiningOp()->setAttrs(pvAttrs);
   }
@@ -1306,6 +1321,129 @@ FailureOr<SmallVector<Value>> ExpReductionOp::decomposeOperation(OpBuilder &b) {
   return llvm::map_to_vector(
       decomposedResults.value(),
       [](linalg::GenericOp op) -> Value { return op->getResult(0); });
+}
+
+//===----------------------------------------------------------------------===//
+// QuantizeAffineOp and DequantizeAffineOp
+//===----------------------------------------------------------------------===//
+
+/// Builds the elementwise `linalg.generic` that both quantization ops decompose
+/// into. `bodyBuilder` receives the scalar arguments in operand order.
+template <typename OpTy>
+static SmallVector<Value> buildQuantizationGeneric(
+    OpTy op, OpBuilder &b,
+    function_ref<Value(OpBuilder &, Location, ValueRange)> bodyBuilder) {
+  Location loc = op.getLoc();
+  SmallVector<Value> inputs{op.getInput(), op.getScale()};
+  if (Value zeroPoint = op.getZeroPoint()) {
+    inputs.push_back(zeroPoint);
+  }
+  SmallVector<utils::IteratorType> iteratorTypes(op.getRank(),
+                                                 utils::IteratorType::parallel);
+  auto genericOp = linalg::GenericOp::create(
+      b, loc, op->getResultTypes(), inputs, ValueRange{op.getOutput()},
+      op.getIndexingMapsArray(), iteratorTypes,
+      [&](OpBuilder &nested, Location nestedLoc, ValueRange args) {
+        Value result = bodyBuilder(nested, nestedLoc, args);
+        linalg::YieldOp::create(nested, nestedLoc, result);
+      });
+  return SmallVector<Value>(genericOp->getResults());
+}
+
+FailureOr<SmallVector<Value>>
+DequantizeAffineOp::decomposeOperation(OpBuilder &b) {
+  // The op defines its arithmetic in the element type of the scale, which need
+  // not be the element type of the input or the output.
+  Type computeType = getScaleElementType();
+  Type realType = getOutputType().getElementType();
+  bool inputUnsigned = getInputUnsigned();
+  bool zpUnsigned = getZpUnsigned();
+  bool symmetric = isSymmetric();
+  // Verified to fit in 64 bits, so this is safe to dereference below.
+  IntegerType differenceType =
+      symmetric ? IntegerType() : *getZeroPointDifferenceType();
+
+  return buildQuantizationGeneric(
+      *this, b, [&](OpBuilder &nested, Location loc, ValueRange args) -> Value {
+        Value quantized = args[0];
+        Value scale = args[1];
+        Value real;
+        if (symmetric) {
+          real = convertScalarToDtype(nested, loc, quantized, computeType,
+                                      /*isUnsignedCast=*/inputUnsigned);
+        } else {
+          // `input - zero_point` can leave the range of the storage type,
+          // e.g. -128 - 127 in i8, so both operands are converted to a type
+          // wide enough to hold the difference. That widens the input; a zero
+          // point whose element type is wider is narrowed instead, which is
+          // safe because its values must be representable in the storage type.
+          Value extQuantized =
+              convertScalarToDtype(nested, loc, quantized, differenceType,
+                                   /*isUnsignedCast=*/inputUnsigned);
+          Value extZeroPoint =
+              convertScalarToDtype(nested, loc, args[2], differenceType,
+                                   /*isUnsignedCast=*/zpUnsigned);
+          Value difference =
+              arith::SubIOp::create(nested, loc, extQuantized, extZeroPoint);
+          // The difference is signed even when both operands are unsigned.
+          real = arith::SIToFPOp::create(nested, loc, computeType, difference);
+        }
+        Value dequantized = arith::MulFOp::create(nested, loc, real, scale);
+        return convertScalarToDtype(nested, loc, dequantized, realType,
+                                    /*isUnsignedCast=*/false);
+      });
+}
+
+FailureOr<SmallVector<Value>>
+QuantizeAffineOp::decomposeOperation(OpBuilder &b) {
+  // The op defines its arithmetic in the element type of the scale, which need
+  // not be the element type of the input or the output.
+  Type computeType = getScaleElementType();
+  Type storageType = getOutputType().getElementType();
+  bool storageUnsigned = getStorageUnsigned();
+  bool zpUnsigned = getZpUnsigned();
+  bool symmetric = isSymmetric();
+  int64_t quantMin = getQuantMin();
+  int64_t quantMax = getQuantMax();
+
+  return buildQuantizationGeneric(
+      *this, b, [&](OpBuilder &nested, Location loc, ValueRange args) -> Value {
+        Value real = convertScalarToDtype(nested, loc, args[0], computeType,
+                                          /*isUnsignedCast=*/false);
+        Value scale = args[1];
+        Value scaled = arith::DivFOp::create(nested, loc, real, scale);
+
+        Value rounded = math::RoundEvenOp::create(nested, loc, scaled);
+
+        Value shifted = rounded;
+        if (!symmetric) {
+          Value zeroPoint =
+              convertScalarToDtype(nested, loc, args[2], computeType,
+                                   /*isUnsignedCast=*/zpUnsigned);
+          shifted = arith::AddFOp::create(nested, loc, rounded, zeroPoint);
+        }
+
+        // Clamp before converting: `arith.fptosi` of a value that does not
+        // fit the target integer type is poison, so a large magnitude or an
+        // infinity has to be brought into [quant_min, quant_max] first.
+        //
+        // `maxnumf`/`minnumf` return the other operand when one is NaN, where
+        // `maximumf`/`minimumf` would propagate the NaN into the conversion
+        // and make it poison anyway. A NaN input therefore quantizes to
+        // quant_min, which the frontends leave implementation-defined.
+        Value lowerBound = arith::ConstantOp::create(
+            nested, loc,
+            nested.getFloatAttr(computeType, static_cast<double>(quantMin)));
+        Value upperBound = arith::ConstantOp::create(
+            nested, loc,
+            nested.getFloatAttr(computeType, static_cast<double>(quantMax)));
+        Value clamped =
+            arith::MaxNumFOp::create(nested, loc, shifted, lowerBound);
+        clamped = arith::MinNumFOp::create(nested, loc, clamped, upperBound);
+
+        return convertScalarToDtype(nested, loc, clamped, storageType,
+                                    /*isUnsignedCast=*/storageUnsigned);
+      });
 }
 
 } // namespace mlir::iree_compiler::IREE::LinalgExt

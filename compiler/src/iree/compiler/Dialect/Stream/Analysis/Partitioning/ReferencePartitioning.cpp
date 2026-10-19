@@ -321,7 +321,16 @@ partitionStreamableOpsReference(IREE::Stream::PartitioningConfigAttr config,
       auto producer = op.getOperand(0).getDefiningOp();
       auto streamable =
           dyn_cast_if_present<IREE::Stream::StreamableOpInterface>(producer);
-      if (streamable) {
+      bool hasCompatibleAffinity = true;
+      if (auto transferOp = dyn_cast<IREE::Stream::AsyncTransferOp>(op)) {
+        auto producerAffinityOp =
+            dyn_cast_if_present<IREE::Stream::AffinityOpInterface>(producer);
+        hasCompatibleAffinity = !producerAffinityOp ||
+                                IREE::Stream::AffinityAttr::canExecuteTogether(
+                                    transferOp.getAffinityAttr(),
+                                    producerAffinityOp.getAffinityAttr());
+      }
+      if (streamable && hasCompatibleAffinity) {
         if (!syncOps.contains(producer)) {
           syncOps[producer] = llvm::SmallVector<Operation *>();
         }
@@ -758,13 +767,16 @@ partitionRegionConcurrencyReference(IREE::Stream::PartitioningConfigAttr config,
       if (!isa<IREE::Stream::ResourceType>(operand.getType())) {
         continue;
       }
+      if (!IREE::Util::TiedOpInterface::hasAnyTiedUses(operand)) {
+        continue;
+      }
       for (auto user : operand.getUsers()) {
         if (user == &op || user->getBlock() != block ||
             user->isBeforeInBlock(&op)) {
           continue;
         }
         auto tiedOp = dyn_cast<IREE::Util::TiedOpInterface>(user);
-        if (!tiedOp || !tiedOp.hasAnyTiedUses(operand)) {
+        if (!tiedOp) {
           continue;
         }
         auto userInfoIt = opInfos.find(user);

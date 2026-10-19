@@ -142,101 +142,6 @@ for function, increments in (("single_observed", (1, 0)), ("dependent_observed",
             report["cases"].append({"name": name, "status": result.returncode, "oracle": "pass" if passed else "fail"})
             save()
 
-matmul_fixture = root / "validation/fixtures/dps_matmul_observed_version.mlir"
-report["matmul_fixture_sha256"] = sha(matmul_fixture)
-matmul_module = out / "dps_matmul_observed_version.vmfb"
-matmul_module.unlink(missing_ok=True)
-matmul_compiled = run(
-    "matmul-compile",
-    [
-        compiler,
-        matmul_fixture,
-        "--iree-hal-target-backends=llvm-cpu",
-        "--iree-llvmcpu-target-cpu=generic",
-        "--mlir-disable-threading",
-        "--mlir-print-ir-before=iree-dispatch-creation-convert-dispatch-regions-to-workgroups",
-        "--mlir-print-ir-after=iree-dispatch-creation-convert-dispatch-regions-to-workgroups,iree-stream-materialize-copy-on-write,iree-stream-schedule-allocation,iree-codegen-iree-comprehensive-bufferize",
-        "-o",
-        matmul_module,
-    ],
-)
-report["matmul_compile_status"] = matmul_compiled.returncode
-report["matmul_has_conversion_ir"] = "IR Dump After ConvertDispatchRegionsToWorkgroupsPass" in matmul_compiled.stderr
-report["matmul_has_stream_ir"] = "stream.cmd.dispatch" in matmul_compiled.stderr
-report["matmul_has_bufferization_ir"] = "IR Dump After IREEComprehensiveBufferizePass" in matmul_compiled.stderr
-if not (
-    matmul_compiled.returncode == 0
-    and matmul_module.is_file()
-    and report["matmul_has_conversion_ir"]
-    and report["matmul_has_stream_ir"]
-    and report["matmul_has_bufferization_ir"]
-):
-    report.update(verdict="inconclusive", failure="non-fusible DPS control did not compile with all required IR stages")
-    save()
-    sys.exit(1)
-
-before_conversion = matmul_compiled.stderr.split("IR Dump Before ConvertDispatchRegionsToWorkgroupsPass:", 1)[1]
-before_conversion = before_conversion.split("IR Dump After ConvertDispatchRegionsToWorkgroupsPass:", 1)[0]
-region_start = before_conversion.find("flow.dispatch.region")
-region_end = before_conversion.find("flow.return", region_start)
-region = before_conversion[region_start:region_end] if region_start >= 0 and region_end >= 0 else ""
-matmul_updates = re.findall(
-    r"(?m)^\s*(%\d+)\s*=\s*linalg\.matmul\b[^\n]*\bouts\((%\d+)\s*:", region
-)
-report["matmul_has_separate_updates"] = len(matmul_updates) == 2
-report["matmul_retains_dependent_init"] = (
-    report["matmul_has_separate_updates"] and matmul_updates[1][1] == matmul_updates[0][0]
-)
-report["matmul_returns_both_versions"] = bool(
-    report["matmul_retains_dependent_init"]
-    and re.search(
-        r"\bflow\.return\s+" + re.escape(matmul_updates[1][0])
-        + r"\s*,\s*" + re.escape(matmul_updates[0][0]) + r"\b",
-        before_conversion,
-    )
-)
-if not report["matmul_returns_both_versions"]:
-    report.update(verdict="inconclusive", failure="pre-conversion IR did not retain a dependent init and both versions")
-    save()
-    sys.exit(1)
-
-matrices = [
-    np.empty((0, 0), dtype=np.float32),
-    np.array([[2.5]], dtype=np.float32),
-    np.array([[1.0, -3.0], [2.0, 4.0]], dtype=np.float32),
-    np.array([[0.0, 1.0, -2.0], [3.0, -4.0, 5.0], [6.0, 0.5, -1.0]], dtype=np.float32),
-]
-for device in ("local-sync", "local-task"):
-    for index, values in enumerate(matrices):
-        name = f"dependent_matmul_observed-{device}-{index}"
-        input_path = out / f"{name}-input.npy"
-        np.save(input_path, values)
-        output_paths = [out / f"{name}-output-{slot}.npy" for slot in range(3)]
-        for path in output_paths:
-            path.unlink(missing_ok=True)
-        argv = [runtime, "--module=" + str(matmul_module), "--device=" + device,
-                "--function=dependent_matmul_observed"]
-        if device == "local-task":
-            argv.append("--task_topology_group_count=2")
-        argv.append("--input=@" + str(input_path))
-        argv.extend("--output=@" + str(path) for path in output_paths)
-        result = run(name, argv)
-        first = values @ values
-        expected = [first + values @ first, first, values]
-        actual = (
-            [np.load(path, allow_pickle=False) for path in output_paths]
-            if result.returncode == 0 and all(path.is_file() for path in output_paths)
-            else []
-        )
-        passed = len(actual) == len(expected) and all(
-            got.dtype == want.dtype
-            and got.shape == want.shape
-            and np.allclose(got, want, rtol=1e-5, atol=1e-5, equal_nan=False)
-            for got, want in zip(actual, expected)
-        )
-        report["cases"].append({"name": name, "status": result.returncode, "oracle": "pass" if passed else "fail"})
-        save()
-
 scatter_fixture = root / "validation/fixtures/linalg_ext_scatter_observed_input.mlir"
 report["scatter_fixture_sha256"] = sha(scatter_fixture)
 scatter_module = out / "linalg_ext_scatter_observed_input.vmfb"
@@ -304,6 +209,107 @@ for device in ("local-sync", "local-task"):
         )
         passed = len(actual) == len(expected) and all(
             got.dtype == want.dtype and got.shape == want.shape and np.array_equal(got, want)
+            for got, want in zip(actual, expected)
+        )
+        report["cases"].append({"name": name, "status": result.returncode, "oracle": "pass" if passed else "fail"})
+        save()
+
+generic_barrier_fixture = root / "validation/fixtures/dps_generic_barrier_observed_version.mlir"
+report["generic_barrier_fixture_sha256"] = sha(generic_barrier_fixture)
+generic_barrier_module = out / "dps_generic_barrier_observed_version.vmfb"
+generic_barrier_module.unlink(missing_ok=True)
+generic_barrier_compiled = run(
+    "generic_barrier-compile",
+    [
+        compiler,
+        generic_barrier_fixture,
+        "--iree-hal-target-backends=llvm-cpu",
+        "--iree-llvmcpu-target-cpu=generic",
+        "--mlir-disable-threading",
+        "--mlir-print-ir-before=iree-dispatch-creation-convert-dispatch-regions-to-workgroups",
+        "--mlir-print-ir-after=iree-dispatch-creation-convert-dispatch-regions-to-workgroups,iree-stream-materialize-copy-on-write,iree-stream-schedule-allocation,iree-codegen-iree-comprehensive-bufferize",
+        "-o",
+        generic_barrier_module,
+    ],
+)
+report["generic_barrier_compile_status"] = generic_barrier_compiled.returncode
+report["generic_barrier_has_conversion_ir"] = "IR Dump After ConvertDispatchRegionsToWorkgroupsPass" in generic_barrier_compiled.stderr
+report["generic_barrier_has_stream_ir"] = "stream.cmd.dispatch" in generic_barrier_compiled.stderr
+report["generic_barrier_has_bufferization_ir"] = "IR Dump After IREEComprehensiveBufferizePass" in generic_barrier_compiled.stderr
+if not (
+    generic_barrier_compiled.returncode == 0
+    and generic_barrier_module.is_file()
+    and report["generic_barrier_has_conversion_ir"]
+    and report["generic_barrier_has_stream_ir"]
+    and report["generic_barrier_has_bufferization_ir"]
+):
+    report.update(verdict="inconclusive", failure="non-fusible DPS control did not compile with all required IR stages")
+    save()
+    sys.exit(1)
+
+before_conversion = generic_barrier_compiled.stderr.split("IR Dump Before ConvertDispatchRegionsToWorkgroupsPass:", 1)[1]
+before_conversion = before_conversion.split("IR Dump After ConvertDispatchRegionsToWorkgroupsPass:", 1)[0]
+region_start = before_conversion.find("flow.dispatch.region")
+region_end = before_conversion.find("flow.return", region_start)
+region = before_conversion[region_start:region_end] if region_start >= 0 and region_end >= 0 else ""
+generic_barrier_updates = re.findall(
+    r"(?m)^\s*(%\d+)\s*=\s*linalg\.generic\b[\s\S]*?\bouts\((%\d+)\s*:", region
+)
+barrier = re.search(
+    r"(?m)^\s*(%\d+)\s*=\s*iree_codegen\.fusion_barrier\s+(%\d+)\s*:", region
+)
+report["generic_barrier_has_separate_updates"] = len(generic_barrier_updates) == 2
+report["generic_barrier_retains_dependent_init"] = (
+    report["generic_barrier_has_separate_updates"]
+    and barrier is not None
+    and barrier[2] == generic_barrier_updates[0][0]
+    and generic_barrier_updates[1][1] == barrier[1]
+)
+report["generic_barrier_returns_both_versions"] = bool(
+    report["generic_barrier_retains_dependent_init"]
+    and re.search(
+        r"\bflow\.return\s+" + re.escape(generic_barrier_updates[1][0])
+        + r"\s*,\s*" + re.escape(generic_barrier_updates[0][0]) + r"\b",
+        before_conversion,
+    )
+)
+if not report["generic_barrier_returns_both_versions"]:
+    report.update(verdict="inconclusive", failure="pre-conversion IR did not retain a dependent init and both versions")
+    save()
+    sys.exit(1)
+
+matrices = [
+    np.empty((0, 0), dtype=np.float32),
+    np.array([[2.5]], dtype=np.float32),
+    np.array([[1.0, -3.0], [2.0, 4.0]], dtype=np.float32),
+    np.array([[0.0, 1.0, -2.0], [3.0, -4.0, 5.0], [6.0, 0.5, -1.0]], dtype=np.float32),
+]
+for device in ("local-sync", "local-task"):
+    for index, values in enumerate(matrices):
+        name = f"dependent_generic_observed-{device}-{index}"
+        input_path = out / f"{name}-input.npy"
+        np.save(input_path, values)
+        output_paths = [out / f"{name}-output-{slot}.npy" for slot in range(3)]
+        for path in output_paths:
+            path.unlink(missing_ok=True)
+        argv = [runtime, "--module=" + str(generic_barrier_module), "--device=" + device,
+                "--function=dependent_generic_observed"]
+        if device == "local-task":
+            argv.append("--task_topology_group_count=2")
+        argv.append("--input=@" + str(input_path))
+        argv.extend("--output=@" + str(path) for path in output_paths)
+        result = run(name, argv)
+        first = values + 1
+        expected = [first * 2, first, values]
+        actual = (
+            [np.load(path, allow_pickle=False) for path in output_paths]
+            if result.returncode == 0 and all(path.is_file() for path in output_paths)
+            else []
+        )
+        passed = len(actual) == len(expected) and all(
+            got.dtype == want.dtype
+            and got.shape == want.shape
+            and np.allclose(got, want, rtol=1e-5, atol=1e-5, equal_nan=False)
             for got, want in zip(actual, expected)
         )
         report["cases"].append({"name": name, "status": result.returncode, "oracle": "pass" if passed else "fail"})

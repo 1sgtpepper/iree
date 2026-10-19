@@ -14,7 +14,7 @@ permissions:
   contents: read
 
 env:
-  SOURCE_SHA: b3d8ab754a62fd8dc98826943eb04bfcde03e576
+  SOURCE_SHA: 5ea02c0346ce41132e93fb0dae45ba9c0f7c5c19
   CCACHE_DIR: ${{ github.workspace }}/compiler-cache
   CCACHE_BASEDIR: ${{ github.workspace }}
   CCACHE_MAXSIZE: 3G

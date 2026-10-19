@@ -18,11 +18,11 @@ jobs:
       - name: Checking out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: b3d8ab754a62fd8dc98826943eb04bfcde03e576
+          ref: 5ea02c0346ce41132e93fb0dae45ba9c0f7c5c19
           persist-credentials: false
       - name: Verify exact source
         run: |
-          test "$(git rev-parse HEAD)" = "b3d8ab754a62fd8dc98826943eb04bfcde03e576"
+          test "$(git rev-parse HEAD)" = "5ea02c0346ce41132e93fb0dae45ba9c0f7c5c19"
           test "$(git rev-parse HEAD^{tree})" = "d9cdd6e204a299206e3799c8e7daf90c228c8ae0"
       - name: Initializing llvm-project submodule
         run: git submodule update --init --depth=1 third_party/llvm-project

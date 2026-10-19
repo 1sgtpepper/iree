@@ -1,7 +1,7 @@
 # Sort workspace CPU validation
 
 This fork-only suite builds and tests source revision
-`b3d8ab754a62fd8dc98826943eb04bfcde03e576`, with its pinned LLVM submodule.
+`5ea02c0346ce41132e93fb0dae45ba9c0f7c5c19`, with its pinned LLVM submodule.
 The workflow checks out that source separately from the validation branch so
 workflow changes cannot silently change the compiler revision under test.
 

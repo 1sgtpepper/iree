@@ -113,7 +113,7 @@ for name, fixture in fixtures.items():
             "--iree-llvmcpu-target-cpu=generic",
             "--mlir-disable-threading",
             "--mlir-print-ir-before=iree-dispatch-creation-convert-dispatch-regions-to-workgroups",
-            "--mlir-print-ir-after=iree-dispatch-creation-convert-dispatch-regions-to-workgroups,iree-codegen-iree-comprehensive-bufferize",
+            "--mlir-print-ir-after=iree-dispatch-creation-convert-dispatch-regions-to-workgroups,iree-stream-materialize-copy-on-write,iree-stream-schedule-allocation,iree-codegen-iree-comprehensive-bufferize",
             "-o",
             module,
         ],
@@ -125,6 +125,7 @@ for name, fixture in fixtures.items():
     case["has_bufferization_ir"] = (
         "IR Dump After IREEComprehensiveBufferizePass" in diagnostic
     )
+    case["has_stream_ir"] = "stream.cmd.dispatch" in diagnostic
     if name == "local-shared-scalar":
         before = diagnostic.split(
             "IR Dump Before ConvertDispatchRegionsToWorkgroupsPass", 1
@@ -139,6 +140,7 @@ for name, fixture in fixtures.items():
         status != 0
         or not module.is_file()
         or not case["has_conversion_ir"]
+        or not case["has_stream_ir"]
         or not case["has_bufferization_ir"]
     ):
         save()
@@ -266,6 +268,7 @@ record["verdict"] = (
     if all(
         case["compile"] == 0
         and case["has_conversion_ir"]
+        and case["has_stream_ir"]
         and case["has_bufferization_ir"]
         and case.get("scalar_inside_region", True)
         and len(case["runtime"]) == 12

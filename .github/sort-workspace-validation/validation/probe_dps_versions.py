@@ -9,6 +9,7 @@
 import hashlib
 import json
 from pathlib import Path
+import re
 import subprocess
 import sys
 
@@ -179,9 +180,23 @@ before_conversion = before_conversion.split("IR Dump After ConvertDispatchRegion
 region_start = before_conversion.find("flow.dispatch.region")
 region_end = before_conversion.find("flow.return", region_start)
 region = before_conversion[region_start:region_end] if region_start >= 0 and region_end >= 0 else ""
-report["matmul_has_separate_updates"] = "linalg.generic" in region and "linalg.matmul" in region
-if not report["matmul_has_separate_updates"]:
-    report.update(verdict="inconclusive", failure="pre-conversion IR did not retain both updates in one dispatch region")
+matmul_updates = re.findall(
+    r"(?m)^\s*(%\d+)\s*=\s*linalg\.matmul\b[^\n]*\bouts\((%\d+)\s*:", region
+)
+report["matmul_has_separate_updates"] = len(matmul_updates) == 2
+report["matmul_retains_dependent_init"] = (
+    report["matmul_has_separate_updates"] and matmul_updates[1][1] == matmul_updates[0][0]
+)
+report["matmul_returns_both_versions"] = bool(
+    report["matmul_retains_dependent_init"]
+    and re.search(
+        r"\bflow\.return\s+" + re.escape(matmul_updates[1][0])
+        + r"\s*,\s*" + re.escape(matmul_updates[0][0]) + r"\b",
+        before_conversion,
+    )
+)
+if not report["matmul_returns_both_versions"]:
+    report.update(verdict="inconclusive", failure="pre-conversion IR did not retain a dependent init and both versions")
     save()
     sys.exit(1)
 
@@ -206,7 +221,7 @@ for device in ("local-sync", "local-task"):
         argv.append("--input=@" + str(input_path))
         argv.extend("--output=@" + str(path) for path in output_paths)
         result = run(name, argv)
-        first = values + np.float32(1.0)
+        first = values @ values
         expected = [first + values @ values, first, values]
         actual = (
             [np.load(path, allow_pickle=False) for path in output_paths]
@@ -217,6 +232,78 @@ for device in ("local-sync", "local-task"):
             got.dtype == want.dtype
             and got.shape == want.shape
             and np.allclose(got, want, rtol=1e-5, atol=1e-5, equal_nan=False)
+            for got, want in zip(actual, expected)
+        )
+        report["cases"].append({"name": name, "status": result.returncode, "oracle": "pass" if passed else "fail"})
+        save()
+
+scatter_fixture = root / "validation/fixtures/linalg_ext_scatter_observed_input.mlir"
+report["scatter_fixture_sha256"] = sha(scatter_fixture)
+scatter_module = out / "linalg_ext_scatter_observed_input.vmfb"
+scatter_module.unlink(missing_ok=True)
+scatter_compiled = run(
+    "scatter-compile",
+    [
+        compiler,
+        scatter_fixture,
+        "--iree-hal-target-backends=llvm-cpu",
+        "--iree-llvmcpu-target-cpu=generic",
+        "--mlir-disable-threading",
+        "--mlir-print-ir-before=iree-dispatch-creation-convert-dispatch-regions-to-workgroups",
+        "--mlir-print-ir-after=iree-dispatch-creation-convert-dispatch-regions-to-workgroups,iree-stream-materialize-copy-on-write,iree-stream-schedule-allocation,iree-codegen-iree-comprehensive-bufferize",
+        "-o",
+        scatter_module,
+    ],
+)
+report["scatter_compile_status"] = scatter_compiled.returncode
+report["scatter_has_op"] = "iree_linalg_ext.scatter" in scatter_compiled.stderr
+report["scatter_has_conversion_ir"] = "IR Dump After ConvertDispatchRegionsToWorkgroupsPass" in scatter_compiled.stderr
+report["scatter_has_stream_ir"] = "stream.cmd.dispatch" in scatter_compiled.stderr
+report["scatter_has_bufferization_ir"] = "IR Dump After IREEComprehensiveBufferizePass" in scatter_compiled.stderr
+if not (
+    scatter_compiled.returncode == 0
+    and scatter_module.is_file()
+    and report["scatter_has_op"]
+    and report["scatter_has_conversion_ir"]
+    and report["scatter_has_stream_ir"]
+    and report["scatter_has_bufferization_ir"]
+):
+    report.update(verdict="inconclusive", failure="Scatter control did not compile with all required IR stages")
+    save()
+    sys.exit(1)
+
+scatter_inputs = [
+    (np.arange(8, dtype=np.int32), np.array([100, 200, 300], dtype=np.int32),
+     np.array([[1], [3], [5]], dtype=np.int32)),
+    (np.array([-(2**31), 3, -4, 9, 0, 4, 5, 2**31 - 1], dtype=np.int32),
+     np.array([-7, 0, 11], dtype=np.int32), np.array([[0], [7], [4]], dtype=np.int32)),
+]
+for device in ("local-sync", "local-task"):
+    for index, (original, updates, indices) in enumerate(scatter_inputs):
+        name = f"scatter_observed-{device}-{index}"
+        input_paths = [out / f"{name}-input-{slot}.npy" for slot in range(3)]
+        for path, values in zip(input_paths, (original, updates, indices)):
+            np.save(path, values)
+        output_paths = [out / f"{name}-output-{slot}.npy" for slot in range(2)]
+        for path in output_paths:
+            path.unlink(missing_ok=True)
+        argv = [runtime, "--module=" + str(scatter_module), "--device=" + device,
+                "--function=scatter_observed"]
+        if device == "local-task":
+            argv.append("--task_topology_group_count=2")
+        argv.extend("--input=@" + str(path) for path in input_paths)
+        argv.extend("--output=@" + str(path) for path in output_paths)
+        result = run(name, argv)
+        scattered = original.copy()
+        scattered[indices[:, 0]] = updates
+        expected = [scattered, original]
+        actual = (
+            [np.load(path, allow_pickle=False) for path in output_paths]
+            if result.returncode == 0 and all(path.is_file() for path in output_paths)
+            else []
+        )
+        passed = len(actual) == len(expected) and all(
+            got.dtype == want.dtype and got.shape == want.shape and np.array_equal(got, want)
             for got, want in zip(actual, expected)
         )
         report["cases"].append({"name": name, "status": result.returncode, "oracle": "pass" if passed else "fail"})

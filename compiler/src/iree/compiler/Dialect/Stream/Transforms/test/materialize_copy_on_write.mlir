@@ -172,8 +172,9 @@ util.func private @tiedDispatches() {
   // CHECK-SAME: (!stream.resource<*>{%c40}, !stream.resource<*>{%c16}) -> %[[CLONE0]]{%c40}
   %dispatch0 = stream.async.dispatch @ex::@dispatch0[%c1, %c1, %c1](%splat0[%c0 to %c40 for %c40], %splat1[%c0 to %c16 for %c16]) : (!stream.resource<*>{%c40}, !stream.resource<*>{%c16}) -> %splat0{%c40}
 
-  // CHECK: %[[DISPATCH1:.+]] = stream.async.dispatch @ex::@dispatch1[%c1, %c1, %c1](%[[DISPATCH0]][%c0 to %c40 for %c40], %[[SPLAT0]][%c0 to %c40 for %c40])
-  // CHECK-SAME: (!stream.resource<*>{%c40}, !stream.resource<*>{%c40}) -> %[[DISPATCH0]]{%c40}
+  // CHECK: %[[CLONE1:.+]] = stream.async.clone %[[DISPATCH0]]
+  // CHECK: %[[DISPATCH1:.+]] = stream.async.dispatch @ex::@dispatch1[%c1, %c1, %c1](%[[CLONE1]][%c0 to %c40 for %c40], %[[SPLAT0]][%c0 to %c40 for %c40])
+  // CHECK-SAME: (!stream.resource<*>{%c40}, !stream.resource<*>{%c40}) -> %[[CLONE1]]{%c40}
   %dispatch1 = stream.async.dispatch @ex::@dispatch1[%c1, %c1, %c1](%dispatch0[%c0 to %c40 for %c40], %splat0[%c0 to %c40 for %c40]) : (!stream.resource<*>{%c40}, !stream.resource<*>{%c40}) -> %dispatch0{%c40}
 
   util.return

@@ -35,6 +35,21 @@ cmake -S "${source_root}" -B build -G Ninja \
   -DLLVM_PARALLEL_LINK_JOBS=1 > evidence/reproducible-configure.log 2>&1
 ninja -C build -j2 iree-compile iree-opt iree-run-module iree-run-mlir FileCheck > evidence/reproducible-build.log 2>&1
 .venv/bin/python validation/validate_exact_source.py
+build/tools/iree-opt --split-input-file \
+  --pass-pipeline='builtin.module(util.func(iree-stream-materialize-copy-on-write))' \
+  "${source_root}/compiler/src/iree/compiler/Dialect/Stream/Transforms/test/materialize_copy_on_write.mlir" \
+  > evidence/materialize-copy-on-write.mlir 2> evidence/materialize-copy-on-write.log
+build/tools/FileCheck \
+  "${source_root}/compiler/src/iree/compiler/Dialect/Stream/Transforms/test/materialize_copy_on_write.mlir" \
+  --input-file=evidence/materialize-copy-on-write.mlir \
+  > evidence/materialize-copy-on-write-filecheck.log 2>&1
+build/tools/iree-opt --split-input-file --iree-stream-elide-async-copies \
+  "${source_root}/compiler/src/iree/compiler/Dialect/Stream/Transforms/test/elide_async_copies_tensor_import_consume.mlir" \
+  > evidence/elide-borrowed-copies.mlir 2> evidence/elide-borrowed-copies.log
+build/tools/FileCheck \
+  "${source_root}/compiler/src/iree/compiler/Dialect/Stream/Transforms/test/elide_async_copies_tensor_import_consume.mlir" \
+  --input-file=evidence/elide-borrowed-copies.mlir \
+  > evidence/elide-borrowed-copies-filecheck.log 2>&1
 .venv/bin/python validation/check_additional_sort_cases.py
 .venv/bin/python validation/validate_sort_workspace_paths.py --source "${source_root}"
 .venv/bin/python validation/validate_source_controls.py

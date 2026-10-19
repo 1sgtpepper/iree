@@ -38,9 +38,13 @@ relative = (
 tiling_relative = (
     "compiler/src/iree/compiler/Dialect/LinalgExt/IR/TilingInterfaceImpl.cpp"
 )
+cow_relative = (
+    "compiler/src/iree/compiler/Dialect/Stream/Transforms/MaterializeCopyOnWrite.cpp"
+)
 cpp = source / relative
 final_files = {
-    name: (source / name).read_bytes() for name in (relative, tiling_relative)
+    name: (source / name).read_bytes()
+    for name in (relative, tiling_relative, cow_relative)
 }
 compiler = build / "tools/iree-compile"
 runtime = build / "tools/iree-run-module"
@@ -166,12 +170,14 @@ try:
                 "two_sorts_original_version",
                 "sort_preserve_intermediate_version",
                 "sort_dynamic_observed_versions",
+                "scatter_preserve_borrowed_input",
             )
         ],
         "compiler/src/iree/compiler/DispatchCreation/test/convert_region_to_workgroups.mlir",
         "compiler/src/iree/compiler/DispatchCreation/test/dispatch_linalg_on_tensors.mlir",
         "compiler/src/iree/compiler/Codegen/Common/test/iree_comprehensive_bufferize.mlir",
         "compiler/src/iree/compiler/Dialect/LinalgExt/Transforms/test/tiling.mlir",
+        "compiler/src/iree/compiler/Dialect/Stream/Transforms/test/materialize_copy_on_write.mlir",
     }
     require(
         set(changed) <= allowed,

@@ -336,17 +336,17 @@ try:
         "partial-sort", output, np.array([3, 1, 2], dtype=np.int64), [1, 0, 2]
     )
 
-    # Restore the former yielded/sole-use shortcut while keeping valid storage
-    # for the nonescaping roles. The original input must now be corrupted.
+    # Restore the local single-use shortcut. The Scatter result is correct,
+    # but its borrowed original input must now be overwritten.
     restore()
-    cpp.write_bytes(
+    (source / cow_relative).write_bytes(
         subprocess.check_output(
             [
                 "git",
                 "-C",
                 str(source),
                 "show",
-                "b566531c8fcdfef29bc72c497a8305e7914159fe:" + relative,
+                "96fc7b5935599240e169344736547682e3e8a16d:" + cow_relative,
             ]
         )
     )
@@ -355,13 +355,26 @@ try:
         ["ninja", "-C", build, "-j2", "iree-compile"],
         "build",
     )
-    lanes = source / "tests/e2e/regression/argsort_comparator_lanes_dynamic.mlir"
+    require(
+        report["runs"][-1]["compiler_library_sha256"]
+        != positive["compiler_library_sha256"],
+        "borrowed storage control reused the positive compiler library",
+    )
+    scatter = root / "validation/fixtures/linalg_ext_scatter_observed_input.mlir"
     command(
         "borrowed-preservation-compile",
-        [compiler, lanes, *flags, "-o", out / "borrowed-preservation.vmfb"],
+        [compiler, scatter, *flags, "-o", out / "borrowed-preservation.vmfb"],
         "compile",
     )
+    original = np.arange(8, dtype=np.int32)
+    updates = np.array([100, 200, 300], dtype=np.int32)
+    indices = np.array([[1], [3], [5]], dtype=np.int32)
+    inputs = [out / f"borrowed-preservation-input-{i}.npy" for i in range(3)]
+    for path, values in zip(inputs, (original, updates, indices)):
+        np.save(path, values)
+    sorted_output = out / "borrowed-preservation-updated.npy"
     output = out / "borrowed-preservation-original.npy"
+    sorted_output.unlink(missing_ok=True)
     output.unlink(missing_ok=True)
     command(
         "borrowed-preservation-run",
@@ -369,35 +382,43 @@ try:
             runtime,
             "--module=" + str(out / "borrowed-preservation.vmfb"),
             "--device=local-sync",
-            "--function=sort_and_original",
-            "--input=3xi64=[3 1 2]",
-            "--output=@" + str(out / "borrowed-preservation-sorted.npy"),
+            "--function=scatter_observed",
+            *("--input=@" + str(path) for path in inputs),
+            "--output=@" + str(sorted_output),
             "--output=@" + str(output),
         ],
         "runtime",
     )
+    require(
+        sorted_output.is_file() and output.is_file(),
+        "borrowed storage control omitted an output",
+    )
+    expected = original.copy()
+    expected[indices[:, 0]] = updates
+    updated = np.load(sorted_output, allow_pickle=False)
     actual = np.load(output, allow_pickle=False)
     require(
-        actual.dtype == np.int64
-        and actual.shape == (3,)
-        and np.array_equal(actual, np.array([1, 2, 3], dtype=np.int64)),
+        updated.dtype == actual.dtype == np.int32
+        and updated.shape == actual.shape == original.shape
+        and np.array_equal(updated, expected)
+        and np.array_equal(actual, updated),
         "borrowed storage control failed for an unexpected reason",
     )
     oracle = (
         "import numpy as np,sys; actual=np.load(sys.argv[1],allow_pickle=False); "
-        "original=np.array([3,1,2],dtype=np.int64); "
+        "original=np.load(sys.argv[2],allow_pickle=False); "
         "ok=actual.dtype==original.dtype and actual.shape==original.shape and np.array_equal(actual,original); "
         'print("input preserved" if ok else "input changed: " + repr(actual.tolist())); '
         "sys.exit(0 if ok else 1)"
     )
     result = command(
         "borrowed-preservation-oracle",
-        [sys.executable, "-c", oracle, output],
+        [sys.executable, "-c", oracle, output, inputs[0]],
         "oracle",
         status=1,
     )
     require(
-        "input changed: [1, 2, 3]" in result.stdout,
+        "input changed: [0, 100, 2, 200, 4, 300, 6, 7]" in result.stdout,
         "borrowed storage oracle failed for an unrelated reason",
     )
     report["runs"][-1][

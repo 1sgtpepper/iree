@@ -12,7 +12,7 @@ func.func @dependent_matmul_observed(%input: tensor<?x?xf32>)
     %initial = linalg.fill ins(%zero : f32) outs(%empty : tensor<?x?xf32>) -> tensor<?x?xf32>
     %first = linalg.matmul ins(%input, %input : tensor<?x?xf32>, tensor<?x?xf32>)
         outs(%initial : tensor<?x?xf32>) -> tensor<?x?xf32>
-    %second = linalg.matmul ins(%input, %input : tensor<?x?xf32>, tensor<?x?xf32>)
+    %second = linalg.matmul ins(%input, %first : tensor<?x?xf32>, tensor<?x?xf32>)
         outs(%first : tensor<?x?xf32>) -> tensor<?x?xf32>
     flow.return %second, %first : tensor<?x?xf32>, tensor<?x?xf32>
   }

@@ -222,7 +222,7 @@ for device in ("local-sync", "local-task"):
         argv.extend("--output=@" + str(path) for path in output_paths)
         result = run(name, argv)
         first = values @ values
-        expected = [first + values @ values, first, values]
+        expected = [first + values @ first, first, values]
         actual = (
             [np.load(path, allow_pickle=False) for path in output_paths]
             if result.returncode == 0 and all(path.is_file() for path in output_paths)

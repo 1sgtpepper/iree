@@ -94,6 +94,17 @@ if not (
     save()
     sys.exit(1)
 
+dependent_before = compiled.stderr.split("util.func public @dependent_observed", 1)[1]
+dependent_before = dependent_before.split("IR Dump After ConvertDispatchRegionsToWorkgroupsPass:", 1)[0]
+dependent_region_start = dependent_before.find("flow.dispatch.region")
+dependent_region_end = dependent_before.find("flow.return", dependent_region_start)
+dependent_region = (
+    dependent_before[dependent_region_start:dependent_region_end]
+    if dependent_region_start >= 0 and dependent_region_end >= 0
+    else ""
+)
+report["dependent_control_fused"] = dependent_region.count("linalg.generic") == 1
+
 values_list = [
     np.array([], dtype=np.int64),
     np.array([7], dtype=np.int64),
@@ -129,6 +140,87 @@ for function, increments in (("single_observed", (1, 0)), ("dependent_observed",
             )
             report["cases"].append({"name": name, "status": result.returncode, "oracle": "pass" if passed else "fail"})
             save()
+
+matmul_fixture = root / "validation/fixtures/dps_matmul_observed_version.mlir"
+report["matmul_fixture_sha256"] = sha(matmul_fixture)
+matmul_module = out / "dps_matmul_observed_version.vmfb"
+matmul_module.unlink(missing_ok=True)
+matmul_compiled = run(
+    "matmul-compile",
+    [
+        compiler,
+        matmul_fixture,
+        "--iree-hal-target-backends=llvm-cpu",
+        "--iree-llvmcpu-target-cpu=generic",
+        "--mlir-disable-threading",
+        "--mlir-print-ir-before=iree-dispatch-creation-convert-dispatch-regions-to-workgroups",
+        "--mlir-print-ir-after=iree-dispatch-creation-convert-dispatch-regions-to-workgroups,iree-stream-materialize-copy-on-write,iree-stream-schedule-allocation,iree-codegen-iree-comprehensive-bufferize",
+        "-o",
+        matmul_module,
+    ],
+)
+report["matmul_compile_status"] = matmul_compiled.returncode
+report["matmul_has_conversion_ir"] = "IR Dump After ConvertDispatchRegionsToWorkgroupsPass" in matmul_compiled.stderr
+report["matmul_has_stream_ir"] = "stream.cmd.dispatch" in matmul_compiled.stderr
+report["matmul_has_bufferization_ir"] = "IR Dump After IREEComprehensiveBufferizePass" in matmul_compiled.stderr
+if not (
+    matmul_compiled.returncode == 0
+    and matmul_module.is_file()
+    and report["matmul_has_conversion_ir"]
+    and report["matmul_has_stream_ir"]
+    and report["matmul_has_bufferization_ir"]
+):
+    report.update(verdict="inconclusive", failure="non-fusible DPS control did not compile with all required IR stages")
+    save()
+    sys.exit(1)
+
+before_conversion = matmul_compiled.stderr.split("IR Dump Before ConvertDispatchRegionsToWorkgroupsPass:", 1)[1]
+before_conversion = before_conversion.split("IR Dump After ConvertDispatchRegionsToWorkgroupsPass:", 1)[0]
+region_start = before_conversion.find("flow.dispatch.region")
+region_end = before_conversion.find("flow.return", region_start)
+region = before_conversion[region_start:region_end] if region_start >= 0 and region_end >= 0 else ""
+report["matmul_has_separate_updates"] = "linalg.generic" in region and "linalg.matmul" in region
+if not report["matmul_has_separate_updates"]:
+    report.update(verdict="inconclusive", failure="pre-conversion IR did not retain both updates in one dispatch region")
+    save()
+    sys.exit(1)
+
+matrices = [
+    np.empty((0, 0), dtype=np.float32),
+    np.array([[2.5]], dtype=np.float32),
+    np.array([[1.0, -3.0], [2.0, 4.0]], dtype=np.float32),
+    np.array([[0.0, 1.0, -2.0], [3.0, -4.0, 5.0], [6.0, 0.5, -1.0]], dtype=np.float32),
+]
+for device in ("local-sync", "local-task"):
+    for index, values in enumerate(matrices):
+        name = f"dependent_matmul_observed-{device}-{index}"
+        input_path = out / f"{name}-input.npy"
+        np.save(input_path, values)
+        output_paths = [out / f"{name}-output-{slot}.npy" for slot in range(3)]
+        for path in output_paths:
+            path.unlink(missing_ok=True)
+        argv = [runtime, "--module=" + str(matmul_module), "--device=" + device,
+                "--function=dependent_matmul_observed"]
+        if device == "local-task":
+            argv.append("--task_topology_group_count=2")
+        argv.append("--input=@" + str(input_path))
+        argv.extend("--output=@" + str(path) for path in output_paths)
+        result = run(name, argv)
+        first = values + np.float32(1.0)
+        expected = [first + values @ values, first, values]
+        actual = (
+            [np.load(path, allow_pickle=False) for path in output_paths]
+            if result.returncode == 0 and all(path.is_file() for path in output_paths)
+            else []
+        )
+        passed = len(actual) == len(expected) and all(
+            got.dtype == want.dtype
+            and got.shape == want.shape
+            and np.allclose(got, want, rtol=1e-5, atol=1e-5, equal_nan=False)
+            for got, want in zip(actual, expected)
+        )
+        report["cases"].append({"name": name, "status": result.returncode, "oracle": "pass" if passed else "fail"})
+        save()
 
 report["verdict"] = "pass" if all(case["oracle"] == "pass" for case in report["cases"]) else "fail"
 save()

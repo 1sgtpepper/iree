@@ -230,7 +230,7 @@ literal_output = out / "scatter-literal-output.txt"
 literal_output.write_text(literal_result.stdout)
 literal_check = run(
     "scatter-literal-filecheck",
-    [build / "tools/FileCheck", literal, "--check-prefix=SCATTER",
+    [build / "llvm-project/bin/FileCheck", literal, "--check-prefix=SCATTER",
      "--input-file=" + str(literal_output)],
 ) if literal_result.returncode == 0 else None
 literal_passed = literal_check is not None and literal_check.returncode == 0

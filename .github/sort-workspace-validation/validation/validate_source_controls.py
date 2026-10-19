@@ -346,7 +346,7 @@ try:
                 "-C",
                 str(source),
                 "show",
-                "96fc7b5935599240e169344736547682e3e8a16d:" + cow_relative,
+                identity["base"] + ":" + cow_relative,
             ]
         )
     )

@@ -8,13 +8,25 @@ name: Validate Sort workspace ownership
 
 on:
   workflow_dispatch:
+    inputs:
+      check:
+        description: Exact-source validation check
+        required: true
+        type: choice
+        default: cpu
+        options:
+          - cpu
+          - clang-tidy
+          - byo-llvm
   workflow_call:
 
 permissions:
   contents: read
+  actions: read
 
 env:
   SOURCE_SHA: 5ea02c0346ce41132e93fb0dae45ba9c0f7c5c19
+  BASE_SHA: 89ece87b89852100c0a4ac3d515e14842d090967
   CCACHE_DIR: ${{ github.workspace }}/compiler-cache
   CCACHE_BASEDIR: ${{ github.workspace }}
   CCACHE_MAXSIZE: 3G
@@ -22,7 +34,7 @@ env:
 
 jobs:
   cpu:
-    if: github.repository == '1sgtpepper/iree'
+    if: github.repository == '1sgtpepper/iree' && (github.event_name != 'workflow_dispatch' || inputs.check == 'cpu')
     runs-on: ubuntu-24.04
     timeout-minutes: 360
     defaults:
@@ -118,3 +130,142 @@ jobs:
           path: suite/evidence
           if-no-files-found: error
           retention-days: 30
+
+  clang-tidy:
+    if: github.repository == '1sgtpepper/iree' && inputs.check == 'clang-tidy'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    container:
+      image: ghcr.io/iree-org/cpubuilder_ubuntu_jammy@sha256:78a558b999b230f7e1da376639e14b44f095f30f1777d6a272ba48c0bbdd4ccb
+    defaults:
+      run:
+        shell: bash
+        working-directory: source
+    steps:
+      - name: Check out exact compiler source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ env.SOURCE_SHA }}
+          path: source
+          submodules: true
+          fetch-depth: 40
+          persist-credentials: false
+
+      - name: Verify source and LLVM revision
+        run: |
+          test "$(git rev-parse HEAD)" = "${SOURCE_SHA}"
+          test "$(git rev-parse HEAD^{tree})" = "d9cdd6e204a299206e3799c8e7daf90c228c8ae0"
+          test "$(git rev-parse HEAD:third_party/llvm-project)" = "32d702efa29d0fdd02cff7b79dea8fdbbcf059d4"
+          test "$(git -C third_party/llvm-project rev-parse HEAD)" = "32d702efa29d0fdd02cff7b79dea8fdbbcf059d4"
+          git cat-file -e "${BASE_SHA}^{commit}"
+
+      - name: Download pinned clang-tidy artifact
+        uses: dawidd6/action-download-artifact@eab87c9830c39eff17e5a6eadb20bfb4bc880477 # v27
+        with:
+          repo: iree-org/iree
+          run_id: 38265336094
+          name: iree-clang-tidy-linux-x86_64
+          path: source/.iree-clang-tidy
+
+      - name: Verify clang-tidy provenance
+        run: |
+          test "$(cat .iree-clang-tidy/llvm-project-revision.txt)" = "32d702efa29d0fdd02cff7b79dea8fdbbcf059d4"
+          echo "68f1249fe85c0036ec2e716e8686af337aa2048fa439104bf9eee70bee944720  .iree-clang-tidy/clang-tidy" | sha256sum -c -
+          chmod +x .iree-clang-tidy/clang-tidy
+          .iree-clang-tidy/clang-tidy --version
+
+      - name: Install Python requirements
+        run: |
+          curl -LsSf https://astral.sh/uv/install.sh | sh
+          export PATH="$HOME/.local/bin:$PATH"
+          uv pip install --system -r runtime/bindings/python/iree/runtime/build_requirements.txt
+          uv pip install --system -r build_tools/github_actions/ci_requirements.txt
+
+      - name: Generate compilation database
+        run: IREE_CONFIGURE_ONLY=1 ./build_tools/cmake/build_all.sh build
+
+      - name: Check changed C++ lines
+        run: |
+          python3 - <<'PY' > "$RUNNER_TEMP/clang-tidy-line-filter.json"
+          import json
+          import re
+          import subprocess
+          from pathlib import Path
+
+          files = [
+              "compiler/src/iree/compiler/Dialect/LinalgExt/IR/TilingInterfaceImpl.cpp",
+              "compiler/src/iree/compiler/Dialect/Stream/Transforms/MaterializeCopyOnWrite.cpp",
+              "compiler/src/iree/compiler/DispatchCreation/ConvertDispatchRegionsToWorkgroups.cpp",
+          ]
+          commands = json.loads(Path("build/compile_commands.json").read_text())
+          compiled = {
+              (Path(command["directory"]) / command["file"]).resolve()
+              for command in commands
+          }
+          missing = [file for file in files if (Path.cwd() / file).resolve() not in compiled]
+          if missing:
+              raise ValueError(f"missing compilation commands: {missing}")
+          diff = subprocess.check_output(
+              ["git", "diff", "--unified=0", "--no-ext-diff", "89ece87b89852100c0a4ac3d515e14842d090967", "HEAD", "--", *files],
+              text=True,
+          )
+          ranges = {}
+          current = None
+          for line in diff.splitlines():
+              if line.startswith("+++ b/"):
+                  current = line[6:]
+              elif line.startswith("@@"):
+                  match = re.search(r"\+(\d+)(?:,(\d+))?", line)
+                  if match is None or current is None:
+                      raise ValueError(line)
+                  start = int(match.group(1))
+                  count = int(match.group(2) or 1)
+                  if count:
+                      ranges.setdefault(current, []).append([start, start + count - 1])
+          if set(ranges) != set(files):
+              raise ValueError(f"unexpected changed C++ files: {sorted(ranges)}")
+          print(json.dumps([{"name": str(Path.cwd() / path), "lines": ranges[path]} for path in files]))
+          PY
+          cat "$RUNNER_TEMP/clang-tidy-line-filter.json"
+          for file in \
+            compiler/src/iree/compiler/Dialect/LinalgExt/IR/TilingInterfaceImpl.cpp \
+            compiler/src/iree/compiler/Dialect/Stream/Transforms/MaterializeCopyOnWrite.cpp \
+            compiler/src/iree/compiler/DispatchCreation/ConvertDispatchRegionsToWorkgroups.cpp; do
+            .iree-clang-tidy/clang-tidy -p build \
+              --line-filter="$(cat "$RUNNER_TEMP/clang-tidy-line-filter.json")" \
+              --warnings-as-errors='*' "$file"
+          done
+
+  byo-llvm:
+    if: github.repository == '1sgtpepper/iree' && inputs.check == 'byo-llvm'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 360
+    container:
+      image: ghcr.io/iree-org/cpubuilder_ubuntu_jammy@sha256:78a558b999b230f7e1da376639e14b44f095f30f1777d6a272ba48c0bbdd4ccb
+    defaults:
+      run:
+        shell: bash
+        working-directory: source
+    env:
+      LLVM_TARGETS_TO_BUILD: X86;AArch64
+    steps:
+      - name: Check out exact compiler source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ env.SOURCE_SHA }}
+          path: source
+          submodules: true
+          persist-credentials: false
+
+      - name: Verify source and LLVM revision
+        run: |
+          test "$(git rev-parse HEAD)" = "${SOURCE_SHA}"
+          test "$(git rev-parse HEAD^{tree})" = "d9cdd6e204a299206e3799c8e7daf90c228c8ae0"
+          test "$(git rev-parse HEAD:third_party/llvm-project)" = "32d702efa29d0fdd02cff7b79dea8fdbbcf059d4"
+          test "$(git -C third_party/llvm-project rev-parse HEAD)" = "32d702efa29d0fdd02cff7b79dea8fdbbcf059d4"
+
+      - name: Install Python requirements
+        run: python3 -m pip install -r build_tools/github_actions/ci_requirements.txt
+
+      - name: Build and test with AArch64 enabled
+        run: ./build_tools/cmake/build_and_test_byo_llvm.sh

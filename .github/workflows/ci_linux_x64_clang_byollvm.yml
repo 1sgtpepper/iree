@@ -184,6 +184,14 @@ jobs:
       - name: Generate compilation database
         run: IREE_CONFIGURE_ONLY=1 ./build_tools/cmake/build_all.sh build
 
+      - name: Build generated include files
+        run: |
+          ninja -C build -t targets all > "$RUNNER_TEMP/ninja-targets.txt"
+          mapfile -t generated < <(sed -nE 's/^([^:]+\.inc): .*/\1/p' "$RUNNER_TEMP/ninja-targets.txt")
+          test "${#generated[@]}" -gt 0
+          printf 'Building %s generated include files\n' "${#generated[@]}"
+          ninja -C build -j 2 "${generated[@]}"
+
       - name: Check changed C++ lines
         run: |
           python3 - <<'PY' > "$RUNNER_TEMP/clang-tidy-line-filter.json"

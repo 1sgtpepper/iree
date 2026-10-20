@@ -227,12 +227,15 @@ jobs:
           print(json.dumps([{"name": str(Path.cwd() / path), "lines": ranges[path]} for path in files]))
           PY
           cat "$RUNNER_TEMP/clang-tidy-line-filter.json"
+          resource_dir="$(clang -print-resource-dir)"
+          test -f "$resource_dir/include/stddef.h"
           for file in \
             compiler/src/iree/compiler/Dialect/LinalgExt/IR/TilingInterfaceImpl.cpp \
             compiler/src/iree/compiler/Dialect/Stream/Transforms/MaterializeCopyOnWrite.cpp \
             compiler/src/iree/compiler/DispatchCreation/ConvertDispatchRegionsToWorkgroups.cpp; do
             .iree-clang-tidy/clang-tidy -p build \
               --line-filter="$(cat "$RUNNER_TEMP/clang-tidy-line-filter.json")" \
+              --extra-arg="-resource-dir=$resource_dir" \
               --warnings-as-errors='*' "$file"
           done
 

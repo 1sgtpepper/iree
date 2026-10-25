@@ -13,7 +13,7 @@ permissions:
   contents: read
 
 env:
-  SOURCE_SHA: ea31f2a084b1265a2dc7140a5535d66ebca84cd8
+  SOURCE_SHA: 9e277e13231a5d3bc0064926fbba13d33f08ae17
   CCACHE_DIR: ${{ github.workspace }}/compiler-cache
   CCACHE_BASEDIR: ${{ github.workspace }}
   CCACHE_MAXSIZE: 3G
@@ -46,7 +46,7 @@ jobs:
           git -C source submodule update --init --depth=1 \
             third_party/llvm-project third_party/flatcc third_party/musl \
             third_party/googletest third_party/benchmark third_party/stablehlo 2>&1 | tee evidence/submodules.log
-          test "$(git -C source/third_party/llvm-project rev-parse HEAD)" = "bdd8381f5b7e39e01b520ac2e99982bf5e926f59"
+          test "$(git -C source/third_party/llvm-project rev-parse HEAD)" = "d033127d27ef0becca9d73edb667ac37442309a4"
       - name: Set up Python
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
@@ -68,8 +68,9 @@ jobs:
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ env.CCACHE_DIR }}
-          key: sort-output-v1-ubuntu24-clang18-O1-bdd8381f-${{ github.sha }}
+          key: sort-output-v2-ubuntu24-clang18-O1-d033127d-${{ github.sha }}
           restore-keys: |
+            sort-output-v2-ubuntu24-clang18-O1-d033127d-
             sort-output-v1-ubuntu24-clang18-O1-bdd8381f-
       - name: Configure and build the candidate
         run: |

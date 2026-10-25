@@ -13,7 +13,7 @@ permissions:
   contents: read
 
 env:
-  SOURCE_SHA: 9e277e13231a5d3bc0064926fbba13d33f08ae17
+  SOURCE_SHA: ab19e5142b3e8a7ce62c8517a10a41c321156ade
   CCACHE_DIR: ${{ github.workspace }}/compiler-cache
   CCACHE_BASEDIR: ${{ github.workspace }}
   CCACHE_MAXSIZE: 3G
@@ -61,6 +61,7 @@ jobs:
           ninja --version >> evidence/environment.log
           python3 --version >> evidence/environment.log
           python3 -m pip freeze >> evidence/environment.log
+          nproc >> evidence/environment.log
           free -h >> evidence/environment.log
           df -h . >> evidence/environment.log
       - name: Restore compiler cache
@@ -89,14 +90,14 @@ jobs:
             -DIREE_HAL_DRIVER_DEFAULTS=OFF -DIREE_HAL_DRIVER_LOCAL_SYNC=ON \
             -DIREE_HAL_DRIVER_LOCAL_TASK=ON 2>&1 | tee evidence/configure.log
           cp build/CMakeCache.txt evidence/
-          ninja -C build -j3 iree-compile iree-opt iree-run-module iree-run-mlir FileCheck 2>&1 | tee evidence/build.log
+          ninja -C build -j4 iree-compile iree-opt iree-run-module iree-run-mlir FileCheck 2>&1 | tee evidence/build.log
       - name: Require baseline failure and rebuild the restored candidate
         run: python3 harness/.github/pr24741-validation/negative_control.py
       - name: Run compiler tests and independent runtime oracles on restored candidate
         run: python3 harness/.github/pr24741-validation/validate_candidate.py --source source --build build --out evidence/candidate
       - name: Record cache statistics
         if: always()
-        run: ccache --show-stats > evidence/cache.log
+        run: ccache --show-stats --verbose > evidence/cache.log
       - name: Save compiler cache
         if: always() && steps.cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0

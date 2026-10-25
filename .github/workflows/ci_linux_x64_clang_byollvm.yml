@@ -1,40 +1,112 @@
-# Copyright 2024 The IREE Authors
+# Copyright 2026 The IREE Authors
 #
 # Licensed under the Apache License v2.0 with LLVM Exceptions.
 # See https://llvm.org/LICENSE.txt for license information.
 # SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
-name: CI - Linux x64 clang BYO LLVM
+name: Validate current Sort output storage
 
 on:
-  schedule:
-    # Weekday mornings at 09:15 UTC = 01:15 PST (UTC - 8).
-    - cron: "15 9 * * 1-5"
   workflow_dispatch:
-  workflow_call:
+
+permissions:
+  contents: read
+
+env:
+  SOURCE_SHA: 816a87003c6143e4287f28d4d82c640fda98ecc8
+  CCACHE_DIR: ${{ github.workspace }}/compiler-cache
+  CCACHE_BASEDIR: ${{ github.workspace }}
+  CCACHE_MAXSIZE: 3G
 
 jobs:
-  linux_x64_clang_byollvm:
-    if: ${{ github.repository_owner == 'iree-org' || github.event_name != 'schedule' }}
+  cpu:
+    if: github.repository == '1sgtpepper/iree'
     runs-on: ubuntu-24.04
-    container: ghcr.io/iree-org/cpubuilder_ubuntu_jammy@sha256:78a558b999b230f7e1da376639e14b44f095f30f1777d6a272ba48c0bbdd4ccb
+    timeout-minutes: 360
     defaults:
       run:
         shell: bash
     steps:
-      - name: "Checking out repository"
+      - name: Check out validation harness
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          submodules: true
-      - name: Install Python requirements
-        run: python3 -m pip install -r ./build_tools/github_actions/ci_requirements.txt
-      - name: "Building and testing with bring-your-own-LLVM"
-        run: ./build_tools/cmake/build_and_test_byo_llvm.sh
-
-      - name: Post to Discord on Failure
-        uses: sarisia/actions-status-discord@eb045afee445dc055c18d3d90bd0f244fd062708 # v1.16.0
-        if: failure() && github.ref_name == 'main' && github.repository_owner == 'iree-org'
+          path: harness
+          persist-credentials: false
+      - name: Check out exact compiler source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          webhook: ${{ secrets.DISCORD_WEBHOOK }}
-          description: "The ${{ github.workflow }} workflow failed"
-          url: "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}/attempts/${{ github.run_attempt }}"
+          ref: ${{ env.SOURCE_SHA }}
+          path: source
+          fetch-depth: 2
+          persist-credentials: false
+      - name: Initialize pinned build dependencies
+        run: |
+          mkdir -p evidence
+          test "$(git -C source rev-parse HEAD)" = "${SOURCE_SHA}"
+          git -C source submodule update --init --depth=1 \
+            third_party/llvm-project third_party/flatcc third_party/musl \
+            third_party/googletest third_party/benchmark 2>&1 | tee evidence/submodules.log
+          test "$(git -C source/third_party/llvm-project rev-parse HEAD)" = "bdd8381f5b7e39e01b520ac2e99982bf5e926f59"
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+      - name: Install build and oracle prerequisites
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang lld ccache ninja-build
+          python3 -m pip install numpy==2.5.4
+          clang --version > evidence/environment.log
+          cmake --version >> evidence/environment.log
+          ninja --version >> evidence/environment.log
+          python3 --version >> evidence/environment.log
+          python3 -m pip freeze >> evidence/environment.log
+          free -h >> evidence/environment.log
+          df -h . >> evidence/environment.log
+      - name: Restore compiler cache
+        id: cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ env.CCACHE_DIR }}
+          key: sort-output-v1-ubuntu24-clang18-O1-bdd8381f-${{ github.sha }}
+          restore-keys: |
+            sort-output-v1-ubuntu24-clang18-O1-bdd8381f-
+      - name: Configure and build the candidate
+        run: |
+          cmake -S source -B build -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_C_COMPILER=/usr/bin/clang -DCMAKE_CXX_COMPILER=/usr/bin/clang++ \
+            '-DCMAKE_CXX_FLAGS_RELEASE=-O1 -DNDEBUG' \
+            -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
+            -DIREE_ENABLE_CCACHE=OFF -DIREE_ENABLE_ASSERTIONS=OFF \
+            -DIREE_USE_LINKER=lld -DLLVM_PARALLEL_LINK_JOBS=1 \
+            -DIREE_BUILD_TESTS=ON -DIREE_BUILD_SAMPLES=OFF -DIREE_BUILD_BENCHMARKS=OFF \
+            -DIREE_BUILD_PYTHON_BINDINGS=OFF -DIREE_ERROR_ON_MISSING_SUBMODULES=OFF \
+            -DIREE_INPUT_STABLEHLO=OFF -DIREE_INPUT_TORCH=OFF -DIREE_INPUT_TOSA=OFF \
+            -DIREE_TARGET_BACKEND_DEFAULTS=OFF -DIREE_TARGET_BACKEND_LLVM_CPU=ON \
+            -DIREE_DEFAULT_CPU_LLVM_TARGETS=X86 \
+            -DIREE_HAL_DRIVER_DEFAULTS=OFF -DIREE_HAL_DRIVER_LOCAL_SYNC=ON \
+            -DIREE_HAL_DRIVER_LOCAL_TASK=ON 2>&1 | tee evidence/configure.log
+          cp build/CMakeCache.txt evidence/
+          ninja -C build -j3 iree-compile iree-opt iree-run-module iree-run-mlir FileCheck 2>&1 | tee evidence/build.log
+      - name: Require baseline failure and rebuild the restored candidate
+        run: python3 harness/.github/pr24741-validation/negative_control.py
+      - name: Run compiler tests and independent runtime oracles on restored candidate
+        run: python3 harness/.github/pr24741-validation/validate_candidate.py --source source --build build --out evidence/candidate
+      - name: Record cache statistics
+        if: always()
+        run: ccache --show-stats > evidence/cache.log
+      - name: Save compiler cache
+        if: always() && steps.cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ env.CCACHE_DIR }}
+          key: ${{ steps.cache.outputs.cache-primary-key }}
+      - name: Upload evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: sort-output-storage-evidence
+          path: evidence
+          if-no-files-found: error
+          retention-days: 30

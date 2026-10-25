@@ -13,7 +13,7 @@ permissions:
   contents: read
 
 env:
-  SOURCE_SHA: 816a87003c6143e4287f28d4d82c640fda98ecc8
+  SOURCE_SHA: c79d54da0a6f7ff77cf93578db1e8951a0a77715
   CCACHE_DIR: ${{ github.workspace }}/compiler-cache
   CCACHE_BASEDIR: ${{ github.workspace }}
   CCACHE_MAXSIZE: 3G
@@ -37,7 +37,7 @@ jobs:
         with:
           ref: ${{ env.SOURCE_SHA }}
           path: source
-          fetch-depth: 2
+          fetch-depth: 40
           persist-credentials: false
       - name: Initialize pinned build dependencies
         run: |
@@ -45,7 +45,7 @@ jobs:
           test "$(git -C source rev-parse HEAD)" = "${SOURCE_SHA}"
           git -C source submodule update --init --depth=1 \
             third_party/llvm-project third_party/flatcc third_party/musl \
-            third_party/googletest third_party/benchmark 2>&1 | tee evidence/submodules.log
+            third_party/googletest third_party/benchmark third_party/stablehlo 2>&1 | tee evidence/submodules.log
           test "$(git -C source/third_party/llvm-project rev-parse HEAD)" = "bdd8381f5b7e39e01b520ac2e99982bf5e926f59"
       - name: Set up Python
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
@@ -82,7 +82,7 @@ jobs:
             -DIREE_USE_LINKER=lld -DLLVM_PARALLEL_LINK_JOBS=1 \
             -DIREE_BUILD_TESTS=ON -DIREE_BUILD_SAMPLES=OFF -DIREE_BUILD_BENCHMARKS=OFF \
             -DIREE_BUILD_PYTHON_BINDINGS=OFF -DIREE_ERROR_ON_MISSING_SUBMODULES=OFF \
-            -DIREE_INPUT_STABLEHLO=OFF -DIREE_INPUT_TORCH=OFF -DIREE_INPUT_TOSA=OFF \
+            -DIREE_INPUT_STABLEHLO=ON -DIREE_INPUT_TORCH=OFF -DIREE_INPUT_TOSA=ON \
             -DIREE_TARGET_BACKEND_DEFAULTS=OFF -DIREE_TARGET_BACKEND_LLVM_CPU=ON \
             -DIREE_DEFAULT_CPU_LLVM_TARGETS=X86 \
             -DIREE_HAL_DRIVER_DEFAULTS=OFF -DIREE_HAL_DRIVER_LOCAL_SYNC=ON \

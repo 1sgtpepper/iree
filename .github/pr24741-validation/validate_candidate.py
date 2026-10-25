@@ -98,12 +98,17 @@ try:
     configured_source = f"CMAKE_HOME_DIRECTORY:INTERNAL={source}"
     if configured_source not in (build / "CMakeCache.txt").read_text().splitlines():
         raise RuntimeError("build is configured for a different source directory")
+    report["stablehlo"] = run(
+        "stablehlo-source",
+        ["git", "-C", source / "third_party/stablehlo", "rev-parse", "HEAD"],
+    ).strip()
     run(
         "build-freshness",
         [
             "ninja",
             "-C",
             build,
+            "-j2",
             "iree-compile",
             "iree-opt",
             "iree-run-module",
@@ -126,24 +131,49 @@ try:
         "argsort_internal_key_use",
         "sort_workspace_versions",
     ]
-    lit = source / "third_party/llvm-project/llvm/utils/lit/lit.py"
-    compiler_tests = [
-        source / "compiler/src/iree/compiler/DispatchCreation/test",
-        source / "compiler/src/iree/compiler/Dialect/Flow/IR/test",
-        source / "compiler/src/iree/compiler/Dialect/LinalgExt/IR/test",
-        source / "compiler/src/iree/compiler/Dialect/LinalgExt/Transforms/test",
-        source
-        / "compiler/src/iree/compiler/Codegen/Common/test/iree_comprehensive_bufferize.mlir",
-    ]
-    run("compiler-lit", ["python3", lit, "-v", "-j2", *compiler_tests])
+    compiler_pattern = r"^iree/compiler/(DispatchCreation/test/|Dialect/(Flow|LinalgExt)/(IR|Transforms)/test/|Codegen/Common/test/iree_comprehensive_bufferize)"
+    runtime_pattern = (
+        r"^iree/tests/e2e/regression/(" + "|".join(fixtures) + r")\.mlir\.test$"
+    )
+    inventory = json.loads(
+        run(
+            "runtime-test-inventory",
+            [
+                "ctest",
+                "--test-dir",
+                build,
+                "--show-only=json-v1",
+                "-R",
+                runtime_pattern,
+            ],
+        )
+    )
+    if len(inventory["tests"]) != len(fixtures):
+        raise RuntimeError("regression tests are missing from CTest registration")
     run(
-        "runtime-lit",
+        "compiler-ctest",
         [
-            "python3",
-            lit,
-            "-v",
+            "ctest",
+            "--test-dir",
+            build,
+            "--output-on-failure",
+            "--no-tests=error",
             "-j2",
-            *[source / f"tests/e2e/regression/{name}.mlir" for name in fixtures],
+            "-R",
+            compiler_pattern,
+        ],
+    )
+    run(
+        "runtime-ctest",
+        [
+            "ctest",
+            "--test-dir",
+            build,
+            "--output-on-failure",
+            "--no-tests=error",
+            "-j2",
+            "-R",
+            runtime_pattern,
         ],
     )
 
@@ -318,6 +348,17 @@ try:
                     keys,
                     labels,
                 ],
+                device,
+            )
+            execute(
+                device + "-destination-chain",
+                artifacts["sort_workspace_versions"],
+                "chained_output_inits",
+                [
+                    np.asarray([3, 1, 2], dtype=np.int64),
+                    np.asarray([10, 20, 30], dtype=np.int64),
+                ],
+                [np.asarray([20, 10, 30], dtype=np.int64)],
                 device,
             )
     report["status"] = "pass"

@@ -740,68 +740,6 @@ void TensorAllocaOp::getCanonicalizationPatterns(RewritePatternSet &results,
 }
 
 //===----------------------------------------------------------------------===//
-// flow.tensor.empty
-//===----------------------------------------------------------------------===//
-
-namespace {
-
-// Folds constant dynamic dimension operands of a flow.tensor.empty into the
-// static result shape, e.g. `flow.tensor.empty : tensor<?xi32>{%c4}` becomes
-// `flow.tensor.empty : tensor<4xi32>`. A cast is inserted to preserve the
-// original (dynamic) result type for existing users; it folds away once
-// those users can accept the refined static type.
-struct FoldTensorEmptyConstantDims : public OpRewritePattern<TensorEmptyOp> {
-  using Base::Base;
-  LogicalResult matchAndRewrite(TensorEmptyOp op,
-                                PatternRewriter &rewriter) const override {
-    auto resultType = cast<RankedTensorType>(op.getResult().getType());
-    ValueRange dynamicDims = op.getResultDims();
-
-    SmallVector<int64_t> newShape(resultType.getShape());
-    // Collect only dimensions that remain dynamic after folding constants.
-    SmallVector<Value> newDynamicDims;
-    unsigned dimIdx = 0;
-    bool didFold = false;
-    for (unsigned i = 0, e = resultType.getRank(); i < e; ++i) {
-      // Skip dimensions that are already static.
-      if (!resultType.isDynamicDim(i)) {
-        continue;
-      }
-      // Get the SSA operand corresponding to dynamic dimension.
-      Value dim = dynamicDims[dimIdx++];
-      std::optional<int64_t> constantDim = getConstantIntValue(dim);
-      if (constantDim && *constantDim >= 0) {
-        // Fold the constant value into the tensor's static shape.
-        newShape[i] = *constantDim;
-        didFold = true;
-      } else {
-        newDynamicDims.push_back(
-            dim); // This dim stays dynamic, so preserve its SSA operand.
-      }
-    }
-    if (!didFold) {
-      return rewriter.notifyMatchFailure(op, "no constant dynamic dims");
-    }
-
-    auto newType = RankedTensorType::get(newShape, resultType.getElementType(),
-                                         resultType.getEncoding());
-    Value newEmpty =
-        TensorEmptyOp::create(rewriter, op.getLoc(), newType, newDynamicDims);
-    // Preserve the original (dynamic) result type for existing users via a
-    // cast; it folds away once those users accept the refined static type.
-    rewriter.replaceOpWithNewOp<tensor::CastOp>(op, resultType, newEmpty);
-    return success();
-  }
-};
-
-} // namespace
-
-void TensorEmptyOp::getCanonicalizationPatterns(RewritePatternSet &results,
-                                                MLIRContext *context) {
-  results.insert<FoldTensorEmptyConstantDims>(context);
-}
-
-//===----------------------------------------------------------------------===//
 // flow.tensor.splat
 //===----------------------------------------------------------------------===//
 
@@ -861,6 +799,17 @@ void TensorCloneOp::getCanonicalizationPatterns(RewritePatternSet &results,
   results.insert<ReplaceOpIfTensorOperandZeroElements<TensorCloneOp, 0>>(
       context);
   results.insert<ReplaceOpIfTensorOperandEmpty<TensorCloneOp, 0, 0>>(context);
+}
+
+//===----------------------------------------------------------------------===//
+// flow.tensor.encode
+//===----------------------------------------------------------------------===//
+
+OpFoldResult TensorEncodeOp::fold(FoldAdaptor operands) {
+  if (getOperand().getType() == getResult().getType()) {
+    return getOperand();
+  }
+  return {};
 }
 
 //===----------------------------------------------------------------------===//
@@ -1023,7 +972,10 @@ OpFoldResult TensorSliceOp::fold(FoldAdaptor operands) {
       return {};
     }
     // Fully constant arguments so we can perform the slice here.
-    auto tensor = cast<ElementsAttr>(operands.getSource());
+    auto tensor = dyn_cast<ElementsAttr>(operands.getSource());
+    if (!tensor) {
+      return {};
+    }
     int64_t rank = cast<ShapedType>(getSource().getType()).getRank();
     auto start =
         llvm::map_to_vector(operands.getStartIndices(), [](Attribute value) {
@@ -1153,9 +1105,12 @@ OpFoldResult TensorUpdateOp::fold(FoldAdaptor operands) {
       llvm::count(operands.getStartIndices(), nullptr) == 0;
   if (operands.getUpdate() && operands.getTarget() && allIndicesConstant) {
     // Fully constant arguments so we can perform the update here.
-    return tensorUpdate(cast<ElementsAttr>(operands.getUpdate()),
-                        cast<ElementsAttr>(operands.getTarget()),
-                        operands.getStartIndices());
+    auto update = dyn_cast<ElementsAttr>(operands.getUpdate());
+    auto target = dyn_cast<ElementsAttr>(operands.getTarget());
+    if (!update || !target) {
+      return {};
+    }
+    return tensorUpdate(update, target, operands.getStartIndices());
   } else {
     // Replace the entire tensor when the sizes match.
     auto updateType = cast<ShapedType>(getUpdate().getType());

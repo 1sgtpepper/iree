@@ -46,6 +46,26 @@ def BubbleUpExpandShapesPass :
   ];
 }
 
+def CollapseContractionDimensionsPass :
+    InterfacePass<"iree-dispatch-creation-collapse-contraction-dimensions", "mlir::FunctionOpInterface"> {
+  let summary = "Collapse contiguous dimensions of contractions outside dispatches.";
+  let description = [{
+    Collapse contiguous dimensions of tensor contractions outside dispatches
+    using the same indexing-map and iterator legality as dispatch dimension
+    collapsing. Preserve operand and result shapes with tensor reshapes. This
+    makes collapsible multi-M/N/K/batch contractions eligible for encoding
+    without requiring dispatch formation first. Contractions inside dispatches
+    and contractions with a compilation info or lowering config are left
+    unchanged.
+  }];
+  let dependentDialects = [
+    "mlir::affine::AffineDialect",
+    "mlir::arith::ArithDialect",
+    "mlir::linalg::LinalgDialect",
+    "mlir::tensor::TensorDialect",
+  ];
+}
+
 def InsertTensorBarriersPass :
     InterfacePass<"iree-dispatch-creation-insert-tensor-barriers",
                   "mlir::FunctionOpInterface"> {
@@ -254,6 +274,19 @@ def TransposeGenericOpsPass :
   ];
 }
 
+def VerifyMaterializedLayoutTargetPass :
+    Pass<"iree-dispatch-creation-verify-materialized-layout-target", "mlir::ModuleOp"> {
+  let summary = "Verifies the target of layouts materialized before dispatch creation.";
+  let description = [{
+    A module whose tensor layouts were materialized before dispatch creation
+    records the executable target in the
+    `iree.encoding.materialized_layout_target` attribute. The layouts are only
+    valid for that target, so this pass fails if the module is compiled for
+    another executable target, for several targets, or for none. Modules
+    without the attribute are unchanged.
+  }];
+}
+
 //===---------------------------------------------------------------------===//
 // Dispatch region creation passes.
 //===---------------------------------------------------------------------===//
@@ -302,7 +335,11 @@ def FormDispatchRegionsPass :
     Option<"fusePadWithConsumers", "fuse-pad-with-consumers", "bool",
            /*default=*/"false", "Enable fusing pad with consumer">,
     Option<"fusePadWithProducers", "fuse-pad-with-producers", "bool",
-           /*default=*/"false", "Enable fusion of pad with producers">
+           /*default=*/"false", "Enable fusion of pad with producers">,
+    Option<"fuseMmt4d", "fuse-mmt4d", "bool",
+           /*default=*/"false", "Fuse layout-preserving elementwise consumers and the result unpack into mmt4d and batch_mmt4d dispatches">,
+    Option<"fuseDataTiledConvolution", "fuse-data-tiled-convolution", "bool",
+           /*default=*/"false", "Fuse the result unpack, after layout-preserving elementwise consumers, into data-tiled convolution dispatches">
   ];
   let description = [{
     Pass to form dispatch.region ops from Linalg on tensor ops. A dispatch region
@@ -404,6 +441,29 @@ def PropagateEncodingsPass :
   ];
 }
 
+def PropagateEncodingsThroughGenericOpsPass :
+    InterfacePass<"iree-dispatch-creation-propagate-encodings-through-generic-ops", "mlir::FunctionOpInterface"> {
+  let summary = "Propagates data-tiling encodings through linalg.generic ops outside dispatches.";
+  let description = [{
+    Bubbles set_encoding ops up through bit-extending and broadcasting
+    linalg.generic producers, and sinks unset_encoding ops down through
+    elementwise linalg.generic consumers, for operations that are outside
+    dispatches and in the same block. These are the same encoding rewrites that
+    iree-dispatch-creation-hoist-encoding-ops applies within dispatch regions.
+    Unsupported operations and encodings, multiple uses, existing dispatches and
+    region boundaries remain encoding boundaries. The pass neither hoists out of
+    dispatches nor propagates across calls. Unlike
+    iree-dispatch-creation-propagate-encodings, which only swaps set_encoding
+    ops with tensor.cast producers, it rewrites the generic ops around the
+    encoding ops.
+  }];
+  let dependentDialects = [
+    "mlir::linalg::LinalgDialect",
+    "mlir::tensor::TensorDialect",
+    "IREE::Encoding::IREEEncodingDialect",
+  ];
+}
+
 def AnnotateDataTilingHintsPass :
     InterfacePass<"iree-dispatch-creation-annotate-data-tiling-hints", "mlir::FunctionOpInterface"> {
   let summary = "Adds data-tiling hint attribute to linalg operations.";
@@ -418,10 +478,42 @@ def AnnotateDataTilingHintsPass :
         "mlir::iree_compiler::IREE::Encoding::EncodingOpType",
         "Op families eligible for data-tiling annotation. "
         "Defaults to {matmul, scaled_matmul}.",
-        [{::llvm::cl::list_init<
-            mlir::iree_compiler::IREE::Encoding::EncodingOpType>(
-            {mlir::iree_compiler::IREE::Encoding::EncodingOpType::matmul,
-             mlir::iree_compiler::IREE::Encoding::EncodingOpType::scaled_matmul})}]>,
+        [{::llvm::cl::list_init(
+            mlir::iree_compiler::DispatchCreation::getDefaultDataTilingOpTypes())}]>,
+  ];
+}
+
+def AssignDataTilingEncodingsPass :
+    Pass<"iree-dispatch-creation-assign-data-tiling-encodings", "mlir::ModuleOp"> {
+  let summary = "Assign data-tiling encodings unless layouts are already materialized.";
+  let description = [{
+    Runs canonicalization, iree-dispatch-creation-annotate-data-tiling-hints
+    and iree-dispatch-creation-set-encoding on every function-like op, with the
+    operation families and encoding strategy given by the options. Modules
+    carrying the `iree.encoding.materialized_layout_target` attribute already
+    have target-specific layouts and are left unchanged.
+  }];
+  let options = [
+    ListOption<
+        "opTypes", "data-tiling-op-types",
+        "mlir::iree_compiler::IREE::Encoding::EncodingOpType",
+        "Op families eligible for data tiling. "
+        "Defaults to {matmul, scaled_matmul}.",
+        [{::llvm::cl::list_init(
+            mlir::iree_compiler::DispatchCreation::getDefaultDataTilingOpTypes())}]>,
+    Option<
+        "encodingOption", "encoding-option",
+        "mlir::iree_compiler::DispatchCreation::EncodingOptions",
+        /*default=*/
+        "mlir::iree_compiler::DispatchCreation::EncodingOptions::Generic",
+        "Select the type of encoding options to add.",
+        [{::llvm::cl::values(
+            clEnumValN(
+                mlir::iree_compiler::DispatchCreation::EncodingOptions::Padding,
+                "padding", "Encode tensors that need to be padded."),
+            clEnumValN(
+                mlir::iree_compiler::DispatchCreation::EncodingOptions::Generic,
+                "default", "Uses EncodingAttr which encodes as much information as possible."))}]>,
   ];
 }
 
@@ -477,6 +569,11 @@ def ConvertDispatchRegionsToWorkgroupsPass :
   let description = [{
     Pass to convert dispatch regions to dispatch workgroups. This pass is
     intended to be used after dispatch regions have been formed.
+
+    Sort outputs with a dynamic sorting axis used as internal storage receive
+    managed writable bindings when their sizes are available outside the
+    dispatch. Sort initializes this storage from its inputs; it must cover the
+    full sorting axis and cannot rely on an unbounded private kernel allocation.
   }];
   let dependentDialects = [
     "mlir::affine::AffineDialect",

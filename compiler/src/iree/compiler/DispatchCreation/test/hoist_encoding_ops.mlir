@@ -1,4 +1,4 @@
-// RUN: iree-opt --pass-pipeline="builtin.module(iree-dispatch-creation-hoist-encoding-ops,cse)" --split-input-file %s | FileCheck %s
+// RUN: iree-opt --pass-pipeline="builtin.module(iree-dispatch-creation-hoist-encoding-ops,cse)" --split-input-file --allow-unregistered-dialect %s | FileCheck %s
 
 #map1 = affine_map<(d0, d1, d2, d3) -> (d0, d3, d2)>
 #map2 = affine_map<(d0, d1, d2, d3) -> (d0, d1, d3)>
@@ -201,7 +201,7 @@ util.func public @hoist_encoding_const_exprs() -> tensor<640x320xf32> {
   %init = tensor.empty() : tensor<640x320xf32>
   %0 = flow.dispatch.region -> (tensor<640x320xf32>) {
     %input = util.global.load @weight : tensor<640x320xf32>
-    %1 = linalg.elementwise kind=#linalg.elementwise_kind<exp>
+    %1 = linalg.elementwise <exp>
       ins(%input: tensor<640x320xf32>)
       outs(%init: tensor<640x320xf32>)
       -> tensor<640x320xf32>
@@ -335,6 +335,36 @@ util.func public @dont_hoist_pad_encoding() -> tensor<640x320xf32, #encoding> {
 // CHECK-LABEL: @dont_hoist_pad_encoding
 //       CHECK:   %[[DISPATCH:.+]] = flow.dispatch.region
 //       CHECK:     %[[SET_ENCODING:.+]] = iree_encoding.set_encoding
+//       CHECK:     flow.return %[[SET_ENCODING]]
+//       CHECK:   return %[[DISPATCH]]
+
+// -----
+
+// Do not bubble `set_encoding` operations with pad encodings through their
+// producers.
+
+#map = affine_map<(d0, d1) -> (d0, d1)>
+#encoding = #iree_encoding.padding<[0, 64]>
+util.func public @dont_bubble_pad_encoding(%arg0: tensor<128x256xi8>) -> tensor<128x256xf32, #encoding> {
+  %0 = flow.dispatch.region -> (tensor<128x256xf32, #encoding>) {
+    %1 = tensor.empty() : tensor<128x256xf32>
+    %2 = linalg.generic {indexing_maps = [#map, #map], iterator_types = ["parallel", "parallel"]}
+        ins(%arg0 : tensor<128x256xi8>) outs(%1 : tensor<128x256xf32>) {
+    ^bb0(%in: i8, %out: f32):
+      %3 = arith.extui %in : i8 to i32
+      %4 = arith.uitofp %3 : i32 to f32
+      linalg.yield %4 : f32
+    } -> tensor<128x256xf32>
+    %5 = iree_encoding.set_encoding %2 : tensor<128x256xf32> -> tensor<128x256xf32, #encoding>
+    flow.return %5 : tensor<128x256xf32, #encoding>
+  }
+  util.return %0 : tensor<128x256xf32, #encoding>
+}
+// CHECK-LABEL: @dont_bubble_pad_encoding
+//       CHECK:   %[[DISPATCH:.+]] = flow.dispatch.region
+//       CHECK:     %[[DEQUANT:.+]] = linalg.generic
+//  CHECK-SAME:       ins(%{{.+}} : tensor<128x256xi8>)
+//       CHECK:     %[[SET_ENCODING:.+]] = iree_encoding.set_encoding %[[DEQUANT]]
 //       CHECK:     flow.return %[[SET_ENCODING]]
 //       CHECK:   return %[[DISPATCH]]
 
@@ -683,18 +713,18 @@ util.func public @bubble_through_dequant_with_encoding_dims(
 // can be rematerialized as tensor.dim on the inputs (which fold to constants
 // for static dimensions).
 
-#map_remat = affine_map<(d0, d1, d2) -> (d0, d1, d2)>
-#map_remat1 = affine_map<(d0, d1, d2) -> (d0, d1)>
-#map_remat2 = affine_map<(d0, d1, d2, d3) -> (d0, d3, d2)>
-#map_remat3 = affine_map<(d0, d1, d2, d3) -> (d0, d1, d3)>
-#map_remat4 = affine_map<(d0, d1, d2, d3) -> (d0, d1, d2)>
-#encoding_remat = #iree_encoding.encoding<operand_index = 1 : index, op_type = matmul, element_types = [f32, f32, f32], user_indexing_maps = [#map_remat2, #map_remat3, #map_remat4], iteration_sizes = [2, ?, ?, ?]>
+#map = affine_map<(d0, d1, d2) -> (d0, d1, d2)>
+#map1 = affine_map<(d0, d1, d2) -> (d0, d1)>
+#map2 = affine_map<(d0, d1, d2, d3) -> (d0, d3, d2)>
+#map3 = affine_map<(d0, d1, d2, d3) -> (d0, d1, d3)>
+#map4 = affine_map<(d0, d1, d2, d3) -> (d0, d1, d2)>
+#encoding = #iree_encoding.encoding<operand_index = 1 : index, op_type = matmul, element_types = [f32, f32, f32], user_indexing_maps = [#map2, #map3, #map4], iteration_sizes = [2, ?, ?, ?]>
 util.func public @bubble_with_rematerialized_encoding_dims(
-    %arg0: tensor<2x11008x128xi8>, %arg1: tensor<2x11008xf32>, %arg2: tensor<2x11008xf32>) -> tensor<2x11008x128xf32, #encoding_remat> {
-  %6 = flow.dispatch.region -> (tensor<2x11008x128xf32, #encoding_remat>) {
+    %arg0: tensor<2x11008x128xi8>, %arg1: tensor<2x11008xf32>, %arg2: tensor<2x11008xf32>) -> tensor<2x11008x128xf32, #encoding> {
+  %6 = flow.dispatch.region -> (tensor<2x11008x128xf32, #encoding>) {
     %8 = tensor.empty() : tensor<2x11008x128xf32>
     %11 = linalg.generic
-        {indexing_maps = [#map_remat, #map_remat1, #map_remat1, #map_remat],
+        {indexing_maps = [#map, #map1, #map1, #map],
         iterator_types = ["parallel", "parallel", "parallel"]}
         ins(%arg0, %arg1, %arg2 : tensor<2x11008x128xi8>, tensor<2x11008xf32>, tensor<2x11008xf32>)
         outs(%8 : tensor<2x11008x128xf32>) {
@@ -713,10 +743,10 @@ util.func public @bubble_with_rematerialized_encoding_dims(
     %m = tensor.dim %11, %c0 : tensor<2x11008x128xf32>
     %n = tensor.dim %11, %c1 : tensor<2x11008x128xf32>
     %k = tensor.dim %11, %c2 : tensor<2x11008x128xf32>
-    %13 = iree_encoding.set_encoding %11 encoding_dims{%m, %n, %k} : tensor<2x11008x128xf32> -> tensor<2x11008x128xf32, #encoding_remat>
-    flow.return %13 : tensor<2x11008x128xf32, #encoding_remat>
+    %13 = iree_encoding.set_encoding %11 encoding_dims{%m, %n, %k} : tensor<2x11008x128xf32> -> tensor<2x11008x128xf32, #encoding>
+    flow.return %13 : tensor<2x11008x128xf32, #encoding>
   }
-  util.return %6 : tensor<2x11008x128xf32, #encoding_remat>
+  util.return %6 : tensor<2x11008x128xf32, #encoding>
 }
 
 // The tensor.dim ops are rematerialized from the first input, folding to constants.
@@ -785,7 +815,7 @@ util.func public @bubble_with_recursive_rematerialization(
 // CHECK-DAG:   %[[C0:.+]] = arith.constant 0 : index
 // CHECK-DAG:   %[[C128:.+]] = arith.constant 128 : index
 // CHECK-DAG:   %[[C11008:.+]] = arith.constant 11008 : index
-// CHECK:       %[[DIM:.+]] = tensor.dim %{{.*}}, %[[C0]]
+// CHECK-DAG:   %[[DIM:.+]] = tensor.dim %{{.*}}, %[[C0]]
 // CHECK-DAG:   iree_encoding.set_encoding %{{.*}} encoding_dims{%[[DIM]], %[[C11008]], %[[C128]]}
 // CHECK-DAG:   iree_encoding.set_encoding %{{.*}} encoding_dims{%[[DIM]], %[[C11008]], %[[C128]]}
 // CHECK-DAG:   iree_encoding.set_encoding %{{.*}} encoding_dims{%[[DIM]], %[[C11008]], %[[C128]]}
@@ -921,3 +951,275 @@ util.func public @no_sink_unset_encoding_through_broadcast(%arg0: tensor<2x2xf32
 // CHECK:           %[[BCAST:.+]] = linalg.generic
 // CHECK-SAME:        ins(%[[UNSET]]
 // CHECK:           flow.return %[[BCAST]]
+
+
+// -----
+
+// Verify bubbling of a set_encoding through a dequant generic whose output
+// indexing map is a non-identity permutation (e.g. a transpose fused into the
+// producer by elementwise fusion).
+// Each operand's own indexing map should be composed with the inverse of the
+// output permutation before being appended to the encoding's map chain.
+
+#map = affine_map<(d0, d1, d2) -> (d0, d1, d2)>
+#map1 = affine_map<(d0, d1, d2) -> (d0, d1)>
+#map2 = affine_map<(d0, d1, d2) -> (d1, d0, d2)>
+#map3 = affine_map<(d0, d1, d2, d3) -> (d0, d3, d2)>
+#map4 = affine_map<(d0, d1, d2, d3) -> (d0, d1, d3)>
+#map5 = affine_map<(d0, d1, d2, d3) -> (d0, d1, d2)>
+#encoding = #iree_encoding.encoding<operand_index = 1 : index, op_type = matmul, element_types = [f32, f32, f32], user_indexing_maps = [#map3, #map4, #map5]>
+util.func public @bubble_through_dequant_and_transpose(
+    %arg0: tensor<2x11008x128xi8>, %arg1: tensor<2x11008xf32>, %arg2: tensor<2x11008xf32>) -> tensor<11008x2x128xf32, #encoding> {
+  %6 = flow.dispatch.region -> (tensor<11008x2x128xf32, #encoding>) {
+    %8 = tensor.empty() : tensor<11008x2x128xf32>
+    %11 = linalg.generic
+        {indexing_maps = [#map, #map1, #map1, #map2],
+        iterator_types = ["parallel", "parallel", "parallel"]}
+        ins(%arg0, %arg1, %arg2 : tensor<2x11008x128xi8>, tensor<2x11008xf32>, tensor<2x11008xf32>)
+        outs(%8 : tensor<11008x2x128xf32>) {
+    ^bb0(%in: i8, %in_0: f32, %in_1: f32, %out: f32):
+      %18 = arith.extui %in : i8 to i32
+      %19 = arith.uitofp %18 : i32 to f32
+      %20 = arith.subf %19, %in_1 : f32
+      %21 = arith.mulf %20, %in_0 : f32
+      linalg.yield %21 : f32
+    } -> tensor<11008x2x128xf32>
+    %13 = iree_encoding.set_encoding %11 : tensor<11008x2x128xf32> -> tensor<11008x2x128xf32, #encoding>
+    flow.return %13 : tensor<11008x2x128xf32, #encoding>
+  }
+  util.return %6 : tensor<11008x2x128xf32, #encoding>
+}
+
+// CHECK-DAG:   #[[MAP:.+]] = affine_map<(d0, d1, d2, d3) -> (d0, d3, d2)>
+// CHECK-DAG:   #[[MAP1:.+]] = affine_map<(d0, d1, d2, d3) -> (d0, d1, d3)>
+// CHECK-DAG:   #[[MAP2:.+]] = affine_map<(d0, d1, d2, d3) -> (d0, d1, d2)>
+// CHECK-DAG:   #[[MAP3:.+]] = affine_map<(d0, d1, d2) -> (d1, d0, d2)>
+// CHECK-DAG:   #[[MAP4:.+]] = affine_map<(d0, d1, d2) -> (d1, d0)>
+// CHECK-DAG:   #{{.*}} = affine_map<(d0, d1, d2) -> (d0, d1, d2)>
+// CHECK-DAG:   #{{.*}} = affine_map<(d0, d1, d2) -> (d0, d1)>
+// CHECK-DAG:   #[[$ENCODING:.+]] = #iree_encoding.encoding<operand_index = 1 : index, op_type = matmul, element_types = [f32, f32, f32], user_indexing_maps = [#[[MAP]], #[[MAP1]], #[[MAP2]]]>
+// CHECK-DAG:   #[[$ENCODING_IBMAP:.+]] = #iree_encoding.encoding<operand_index = 1 : index, op_type = matmul, element_types = [f32, f32, f32], user_indexing_maps = [#[[MAP]], [#[[MAP1]], #[[MAP3]]], #[[MAP2]]]>
+// CHECK-DAG:   #[[$ENCODING_BMAP:.+]] = #iree_encoding.encoding<operand_index = 1 : index, op_type = matmul, element_types = [f32, f32, f32], user_indexing_maps = [#[[MAP]], [#[[MAP1]], #[[MAP4]]], #[[MAP2]]]>
+// CHECK-LABEL: @bubble_through_dequant_and_transpose
+// CHECK-SAME:    %[[ARG0:.+]]: tensor<2x11008x128xi8>,
+// CHECK-SAME:    %[[ARG1:.+]]: tensor<2x11008xf32>, %[[ARG2:.+]]: tensor<2x11008xf32>
+// CHECK-DAG:   %[[SET_ENCODING0:.+]] = iree_encoding.set_encoding %[[ARG0]] : tensor<2x11008x128xi8> -> tensor<2x11008x128xi8, #[[$ENCODING_IBMAP]]>
+// CHECK-DAG:   %[[SET_ENCODING1:.+]] = iree_encoding.set_encoding %[[ARG1]] : tensor<2x11008xf32> -> tensor<2x11008xf32, #[[$ENCODING_BMAP]]>
+// CHECK-DAG:   %[[SET_ENCODING2:.+]] = iree_encoding.set_encoding %[[ARG2]] : tensor<2x11008xf32> -> tensor<2x11008xf32, #[[$ENCODING_BMAP]]>
+// CHECK:       %[[DISPATCH:.+]] = flow.dispatch.region
+// CHECK:         %[[INIT:.+]] = tensor.empty() : tensor<11008x2x128xf32, #[[$ENCODING]]>
+// CHECK:         %[[DEQUANT:.+]] = linalg.generic {{.*}} ins(%[[SET_ENCODING0]], %[[SET_ENCODING1]], %[[SET_ENCODING2]] : {{.*}} outs(%[[INIT]] :
+// CHECK:         flow.return %[[DEQUANT]]
+// CHECK:       }
+// CHECK:       util.return %[[DISPATCH]]
+
+// -----
+
+// Same bubbling as above, but with an output permutation that is not its
+// own inverse (d0, d1, d2 -> d1, d2, d0).
+
+#map = affine_map<(d0, d1, d2) -> (d0, d1, d2)>
+#map1 = affine_map<(d0, d1, d2) -> (d1, d2, d0)>
+#map2 = affine_map<(d0, d1, d2, d3) -> (d0, d3, d2)>
+#map3 = affine_map<(d0, d1, d2, d3) -> (d0, d1, d3)>
+#encoding = #iree_encoding.encoding<operand_index = 1 : index, op_type = matmul, element_types = [f32, f32], user_indexing_maps = [#map2, #map3, #map2]>
+util.func public @bubble_through_non_involutive_permutation(
+    %arg0: tensor<2x11008x128xf16>) -> tensor<11008x128x2xf32, #encoding> {
+  %6 = flow.dispatch.region -> (tensor<11008x128x2xf32, #encoding>) {
+    %8 = tensor.empty() : tensor<11008x128x2xf32>
+    %11 = linalg.generic
+        {indexing_maps = [#map, #map1],
+        iterator_types = ["parallel", "parallel", "parallel"]}
+        ins(%arg0 : tensor<2x11008x128xf16>)
+        outs(%8 : tensor<11008x128x2xf32>) {
+    ^bb0(%in: f16, %out: f32):
+      %18 = arith.extf %in : f16 to f32
+      linalg.yield %18 : f32
+    } -> tensor<11008x128x2xf32>
+    %13 = iree_encoding.set_encoding %11 : tensor<11008x128x2xf32> -> tensor<11008x128x2xf32, #encoding>
+    flow.return %13 : tensor<11008x128x2xf32, #encoding>
+  }
+  util.return %6 : tensor<11008x128x2xf32, #encoding>
+}
+
+// CHECK-DAG:   #[[MAP:.+]] = affine_map<(d0, d1, d2, d3) -> (d0, d3, d2)>
+// CHECK-DAG:   #[[MAP1:.+]] = affine_map<(d0, d1, d2, d3) -> (d0, d1, d3)>
+// CHECK-DAG:   #[[MAP2:.+]] = affine_map<(d0, d1, d2) -> (d2, d0, d1)>
+// CHECK-DAG:   #{{.*}} = affine_map<(d0, d1, d2) -> (d0, d1, d2)>
+// CHECK-DAG:   #{{.*}} = affine_map<(d0, d1, d2) -> (d1, d2, d0)>
+// CHECK-DAG:   #[[$ENCODING:.+]] = #iree_encoding.encoding<operand_index = 1 : index, op_type = matmul, element_types = [f32, f32], user_indexing_maps = [#[[MAP]], #[[MAP1]], #[[MAP]]]>
+// CHECK-DAG:   #[[$ENCODING_IBMAP:.+]] = #iree_encoding.encoding<operand_index = 1 : index, op_type = matmul, element_types = [f32, f32], user_indexing_maps = [#[[MAP]], [#[[MAP1]], #[[MAP2]]], #[[MAP]]]>
+// CHECK-LABEL: @bubble_through_non_involutive_permutation
+// CHECK-SAME:    %[[ARG0:.+]]: tensor<2x11008x128xf16>
+// CHECK:       %[[SET_ENCODING0:.+]] = iree_encoding.set_encoding %[[ARG0]] : tensor<2x11008x128xf16> -> tensor<2x11008x128xf16, #[[$ENCODING_IBMAP]]>
+// CHECK:       %[[DISPATCH:.+]] = flow.dispatch.region
+// CHECK:         %[[INIT:.+]] = tensor.empty() : tensor<11008x128x2xf32, #[[$ENCODING]]>
+// CHECK:         %[[DEQUANT:.+]] = linalg.generic {{.*}} ins(%[[SET_ENCODING0]] : {{.*}} outs(%[[INIT]] :
+// CHECK:         flow.return %[[DEQUANT]]
+// CHECK:       }
+// CHECK:       util.return %[[DISPATCH]]
+
+// -----
+
+// A reduction output map isn't a permutation, so the set_encoding must not bubble through it.
+
+#map = affine_map<(d0, d1) -> (d0, d1)>
+#map1 = affine_map<(d0, d1) -> (d1)>
+#map2 = affine_map<(d0, d1) -> (d0)>
+#encoding = #iree_encoding.encoding<operand_index = 2 : index, op_type = matmul, element_types = [f32, f32, f32], user_indexing_maps = [#map, #map1, #map2]>
+util.func public @dont_bubble_through_reduction_output_map(
+    %arg0: tensor<8x4096xf32>) -> tensor<8xf32, #encoding> {
+  %0 = flow.dispatch.region -> (tensor<8xf32, #encoding>) {
+    %2 = tensor.empty() : tensor<8xf32>
+    %3 = linalg.generic {indexing_maps = [#map, #map2], iterator_types = ["parallel", "reduction"]} ins(%arg0 : tensor<8x4096xf32>) outs(%2 : tensor<8xf32>) {
+    ^bb0(%in: f32, %out: f32):
+      %4 = arith.addf %in, %out : f32
+      linalg.yield %4 : f32
+    } -> tensor<8xf32>
+    %5 = iree_encoding.set_encoding %3 : tensor<8xf32> -> tensor<8xf32, #encoding>
+    flow.return %5 : tensor<8xf32, #encoding>
+  }
+  util.return %0 : tensor<8xf32, #encoding>
+}
+// CHECK-LABEL: @dont_bubble_through_reduction_output_map
+// CHECK:         flow.dispatch.region
+// CHECK:           tensor.empty
+// CHECK:           linalg.generic
+// CHECK:           iree_encoding.set_encoding
+// CHECK:           flow.return
+// CHECK:         util.return
+
+// -----
+
+// encoding_dims rematerialization must still work when the raw inputs' dim order differs from the transposed generic output's.
+
+#map = affine_map<(d0, d1, d2) -> (d0, d1, d2)>
+#map1 = affine_map<(d0, d1, d2) -> (d0, d1)>
+#map2 = affine_map<(d0, d1, d2) -> (d1, d0, d2)>
+#map3 = affine_map<(d0, d1, d2, d3) -> (d0, d3, d2)>
+#map4 = affine_map<(d0, d1, d2, d3) -> (d0, d1, d3)>
+#map5 = affine_map<(d0, d1, d2, d3) -> (d0, d1, d2)>
+#encoding = #iree_encoding.encoding<operand_index = 1 : index, op_type = matmul, element_types = [f32, f32, f32], user_indexing_maps = [#map3, #map4, #map5], iteration_sizes = [2, ?, ?, ?]>
+util.func public @bubble_with_rematerialized_encoding_dims_transposed(
+    %arg0: tensor<2x11008x128xi8>, %arg1: tensor<2x11008xf32>, %arg2: tensor<2x11008xf32>) -> tensor<11008x2x128xf32, #encoding> {
+  %6 = flow.dispatch.region -> (tensor<11008x2x128xf32, #encoding>) {
+    %8 = tensor.empty() : tensor<11008x2x128xf32>
+    %11 = linalg.generic
+        {indexing_maps = [#map, #map1, #map1, #map2],
+        iterator_types = ["parallel", "parallel", "parallel"]}
+        ins(%arg0, %arg1, %arg2 : tensor<2x11008x128xi8>, tensor<2x11008xf32>, tensor<2x11008xf32>)
+        outs(%8 : tensor<11008x2x128xf32>) {
+    ^bb0(%in: i8, %in_0: f32, %in_1: f32, %out: f32):
+      %18 = arith.extui %in : i8 to i32
+      %19 = arith.uitofp %18 : i32 to f32
+      %20 = arith.subf %19, %in_1 : f32
+      %21 = arith.mulf %20, %in_0 : f32
+      linalg.yield %21 : f32
+    } -> tensor<11008x2x128xf32>
+    %c0 = arith.constant 0 : index
+    %c1 = arith.constant 1 : index
+    %c2 = arith.constant 2 : index
+    %m = tensor.dim %11, %c0 : tensor<11008x2x128xf32>
+    %n = tensor.dim %11, %c1 : tensor<11008x2x128xf32>
+    %k = tensor.dim %11, %c2 : tensor<11008x2x128xf32>
+    %13 = iree_encoding.set_encoding %11 encoding_dims{%m, %n, %k} : tensor<11008x2x128xf32> -> tensor<11008x2x128xf32, #encoding>
+    flow.return %13 : tensor<11008x2x128xf32, #encoding>
+  }
+  util.return %6 : tensor<11008x2x128xf32, #encoding>
+}
+
+// The tensor.dim ops rematerialize from the raw i8 input and fold to constants, keeping the transposed output's (N, batch, K) value order.
+// CHECK-DAG:   #[[$ENCODING:.+]] = #iree_encoding.encoding<operand_index = 1 : index, op_type = matmul, element_types = [f32, f32, f32]
+// CHECK-LABEL: @bubble_with_rematerialized_encoding_dims_transposed
+// CHECK-SAME:    %[[ARG0:.+]]: tensor<2x11008x128xi8>,
+// CHECK-SAME:    %[[ARG1:.+]]: tensor<2x11008xf32>, %[[ARG2:.+]]: tensor<2x11008xf32>
+// CHECK-DAG:   %[[C2:.+]] = arith.constant 2 : index
+// CHECK-DAG:   %[[C11008:.+]] = arith.constant 11008 : index
+// CHECK-DAG:   %[[C128:.+]] = arith.constant 128 : index
+// CHECK-DAG:   %[[SET_ENCODING0:.+]] = iree_encoding.set_encoding %[[ARG0]] encoding_dims{%[[C11008]], %[[C2]], %[[C128]]}
+// CHECK-DAG:   %[[SET_ENCODING1:.+]] = iree_encoding.set_encoding %[[ARG1]] encoding_dims{%[[C11008]], %[[C2]], %[[C128]]}
+// CHECK-DAG:   %[[SET_ENCODING2:.+]] = iree_encoding.set_encoding %[[ARG2]] encoding_dims{%[[C11008]], %[[C2]], %[[C128]]}
+// CHECK:       %[[DISPATCH:.+]] = flow.dispatch.region
+// CHECK:         %[[INIT:.+]] = tensor.empty() : tensor<11008x2x128xf32, #[[$ENCODING]]>
+// CHECK:         %[[DEQUANT:.+]] = linalg.generic {{.*}} ins(%[[SET_ENCODING0]], %[[SET_ENCODING1]], %[[SET_ENCODING2]] : {{.*}} outs(%[[INIT]] :
+// CHECK:         flow.return %[[DEQUANT]]
+// CHECK:       }
+// CHECK:       util.return %[[DISPATCH]]
+
+// -----
+
+// `encoding_dims` are produced inside the dispatch by tensor.dim / affine.apply
+// of values defined outside the dispatch. These ops only feed metadata, so they
+// must not block hoisting of the set_encoding ops.
+
+#map_md = affine_map<(d0, d1, d2) -> (d0, d2)>
+#map_md1 = affine_map<(d0, d1, d2) -> (d2, d1)>
+#map_md2 = affine_map<(d0, d1, d2) -> (d0, d1)>
+#map_md3 = affine_map<()[s0] -> (s0 * 8)>
+#enc_md_lhs = #iree_encoding.encoding<operand_index = 0 : index, op_type =  matmul, element_types = [f32, f32, f32], user_indexing_maps = [#map_md, #map_md1, #map_md2], iteration_sizes = [?, 256, ?]>
+#enc_md_rhs = #iree_encoding.encoding<operand_index = 1 : index, op_type =  matmul, element_types = [f32, f32, f32], user_indexing_maps = [#map_md, #map_md1, #map_md2], iteration_sizes = [?, 256, ?]>
+#enc_md_out = #iree_encoding.encoding<operand_index = 2 : index, op_type =  matmul, element_types = [f32, f32, f32], user_indexing_maps = [#map_md, #map_md1, #map_md2], iteration_sizes = [?, 256, ?]>
+util.func public @hoist_matmul_with_metadata_encoding_dims(
+    %reshape: tensor<8x?x?xf32>, %collapsed: tensor<?x?xf32>,
+    %rhs: tensor<?x256xf32>, %out_sz: index) -> tensor<?x256xf32> {
+  %0 = flow.dispatch.region -> (tensor<?x256xf32>{%out_sz}) {
+    %cst = arith.constant 0.000000e+00 : f32
+    %c1 = arith.constant 1 : index
+    %c2 = arith.constant 2 : index
+    %dim1 = tensor.dim %reshape, %c1 : tensor<8x?x?xf32>
+    %m = affine.apply #map_md3()[%dim1]
+    %k = tensor.dim %reshape, %c2 : tensor<8x?x?xf32>
+    %lhs_enc = iree_encoding.set_encoding %collapsed encoding_dims{%m, %k} : tensor<?x?xf32> -> tensor<?x?xf32, #enc_md_lhs>
+    %rhs_enc = iree_encoding.set_encoding %rhs encoding_dims{%m, %k} : tensor<?x256xf32> -> tensor<?x256xf32, #enc_md_rhs>
+    %init = tensor.empty(%out_sz) : tensor<?x256xf32, #enc_md_out>
+    %fill = linalg.fill ins(%cst : f32) outs(%init : tensor<?x256xf32, #enc_md_out>) -> tensor<?x256xf32, #enc_md_out>
+    %mm = linalg.matmul ins(%lhs_enc, %rhs_enc : tensor<?x?xf32, #enc_md_lhs>, tensor<?x256xf32, #enc_md_rhs>) outs(%fill : tensor<?x256xf32, #enc_md_out>) -> tensor<?x256xf32, #enc_md_out>
+    %unset = iree_encoding.unset_encoding %mm encoding_dims{%m, %k} : tensor<?x256xf32, #enc_md_out> -> tensor<?x256xf32>{%out_sz}
+    flow.return %unset : tensor<?x256xf32>
+  }
+  util.return %0 : tensor<?x256xf32>
+}
+// CHECK-LABEL: @hoist_matmul_with_metadata_encoding_dims
+// CHECK-SAME:    %[[RESHAPE:.+]]: tensor<8x?x?xf32>, %[[COLLAPSED:.+]]: tensor<?x?xf32>, %[[RHS:.+]]: tensor<?x256xf32>
+// The tensor.dim / affine.apply that produce the encoding_dims hoist out
+// alongside the set_encoding ops.
+// CHECK-DAG:   %[[DIM1:.+]] = tensor.dim %[[RESHAPE]], %c1
+// CHECK-DAG:   %[[DIM2:.+]] = tensor.dim %[[RESHAPE]], %c2
+// CHECK-DAG:   %[[M:.+]] = affine.apply {{.*}}[%[[DIM1]]]
+// CHECK-DAG:   iree_encoding.set_encoding %[[COLLAPSED]] encoding_dims{%[[M]], %[[DIM2]]}
+// CHECK-DAG:   iree_encoding.set_encoding %[[RHS]] encoding_dims{%[[M]], %[[DIM2]]}
+// CHECK:       flow.dispatch.region
+// CHECK:         linalg.matmul
+// CHECK:         iree_encoding.unset_encoding
+// CHECK:         flow.return
+
+// -----
+
+// Mixed-chain rejection: `some_unhoistable_op` is shared between the metadata path
+// (it is an encoding_dim of the SetEncodingOp) and the data path (it is a
+// dynamic size of the tensor.extract_slice that becomes the SetEncodingOp's
+// source).
+
+#map_rej = affine_map<(d0, d1, d2) -> (d0, d2)>
+#map_rej1 = affine_map<(d0, d1, d2) -> (d2, d1)>
+#map_rej2 = affine_map<(d0, d1, d2) -> (d0, d1)>
+#enc_rej = #iree_encoding.encoding<operand_index = 0 : index, op_type =  matmul, element_types = [f32, f32, f32], user_indexing_maps = [#map_rej, #map_rej1, #map_rej2], iteration_sizes = [?, 256, 256]>
+util.func public @no_hoist_when_data_path_shares_metadata_op(
+    %src: tensor<?x256xf32>, %m: index) -> tensor<?x256xf32> {
+  %0 = flow.dispatch.region -> (tensor<?x256xf32>{%m}) {
+    %c0 = arith.constant 0 : index
+    %d = "some_unhoistable_op"(%src) : (tensor<?x256xf32>) -> index
+    %slice = tensor.extract_slice %src[0, 0] [%d, 256] [1, 1] : tensor<?x256xf32> to tensor<?x256xf32>
+    %enc = iree_encoding.set_encoding %slice encoding_dims{%d} : tensor<?x256xf32> -> tensor<?x256xf32, #enc_rej>
+    %unset = iree_encoding.unset_encoding %enc encoding_dims{%d} : tensor<?x256xf32, #enc_rej> -> tensor<?x256xf32>{%m}
+    flow.return %unset : tensor<?x256xf32>
+  }
+  util.return %0 : tensor<?x256xf32>
+}
+// CHECK-LABEL: @no_hoist_when_data_path_shares_metadata_op
+// CHECK:       %[[DISPATCH:.+]] = flow.dispatch.region
+// CHECK:         %[[DIM:.+]] = "some_unhoistable_op"
+// CHECK:         %[[SLICE:.+]] = tensor.extract_slice
+// CHECK:         %[[SET:.+]] = iree_encoding.set_encoding %[[SLICE]] encoding_dims{%[[DIM]]}
+// CHECK:         iree_encoding.unset_encoding %[[SET]] encoding_dims{%[[DIM]]}
+// CHECK:         flow.return

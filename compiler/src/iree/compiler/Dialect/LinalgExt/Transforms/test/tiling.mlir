@@ -243,9 +243,13 @@ module attributes { transform.with_named_sequence } {
 
 
 func.func @sort_1d(%arg0: tensor<?xi32>) -> tensor<?xi32> {
+  %c0 = arith.constant 0 : index
+  %d0 = tensor.dim %arg0, %c0 : tensor<?xi32>
+  %empty = tensor.empty(%d0) : tensor<?xi32>
   %0 = iree_linalg_ext.sort
        dimension(0)
-       outs(%arg0 : tensor<?xi32>) {
+       ins(%arg0 : tensor<?xi32>)
+       outs(%empty : tensor<?xi32>) {
        ^bb0(%arg2: i32, %arg3: i32):
          %0 = arith.cmpi sgt, %arg2, %arg3 : i32
          iree_linalg_ext.yield %0 : i1
@@ -261,16 +265,26 @@ module attributes { transform.with_named_sequence } {
 }
 //      CHECK: func.func @sort_1d(
 // CHECK-SAME:   %[[OPERAND:.+]]: tensor<?xi32>
+//   CHECK-DAG:   %[[C0:.+]] = arith.constant 0 : index
+//   CHECK-DAG:   %[[D0:.+]] = tensor.dim %[[OPERAND]], %[[C0]] : tensor<?xi32>
+//   CHECK-DAG:   %[[EMPTY:.+]] = tensor.empty(%[[D0]]) : tensor<?xi32>
 //      CHECK:   %[[RESULT:.+]] = iree_linalg_ext.sort
-// CHECK-SAME:       outs(%[[OPERAND]] :
+//      CHECK:       dimension(0)
+//      CHECK:       ins(%[[OPERAND]] : tensor<?xi32>)
+//      CHECK:       outs(%[[EMPTY]] : tensor<?xi32>)
 //      CHECK:   return %[[RESULT]]
 
 // -----
 
 func.func @sort_2d(%arg0: tensor<?x?xi32>) -> tensor<?x?xi32> {
+  %c0 = arith.constant 0 : index
+  %c1 = arith.constant 1 : index
+  %d0 = tensor.dim %arg0, %c0 : tensor<?x?xi32>
+  %d1 = tensor.dim %arg0, %c1 : tensor<?x?xi32>
+  %empty = tensor.empty(%d0, %d1) : tensor<?x?xi32>
   %0 = iree_linalg_ext.sort
        dimension(1)
-       outs(%arg0 : tensor<?x?xi32>) {
+       ins(%arg0 : tensor<?x?xi32>) outs(%empty : tensor<?x?xi32>) {
        ^bb0(%arg2: i32, %arg3: i32):
          %0 = arith.cmpi sgt, %arg2, %arg3 : i32
          iree_linalg_ext.yield %0 : i1
@@ -292,24 +306,29 @@ module attributes { transform.with_named_sequence } {
 //   CHECK-DAG:   %[[C1:.+]] = arith.constant 1 : index
 //   CHECK-DAG:   %[[D0:.+]] = tensor.dim %[[OPERAND]], %[[C0]]
 //   CHECK-DAG:   %[[D1:.+]] = tensor.dim %[[OPERAND]], %[[C1]]
+//   CHECK-DAG:   %[[EMPTY:.+]] = tensor.empty(%[[D0]], %[[D1]]) : tensor<?x?xi32>
 //       CHECK:   %[[RESULT:.+]] = scf.for %[[IV:.+]] = %[[C0]] to %[[D0]] step %[[TILESIZE]]
-//  CHECK-SAME:       iter_args(%[[INIT:.+]] = %[[OPERAND]])
+//       CHECK:       iter_args(%[[INIT:.+]] = %[[EMPTY]])
 //   CHECK-DAG:     %[[USED_TILESIZE:.+]] = affine.min #[[MAP]](%[[IV]])[%[[D0]]]
-//       CHECK:     %[[OPERAND_SLICE:.+]] = tensor.extract_slice %[[INIT]][%[[IV]], 0]
-//  CHECK-SAME:         [%[[USED_TILESIZE]], %[[D1]]]
-//       CHECK:     %[[SORT_TILE:.+]] = iree_linalg_ext.sort
-//  CHECK-SAME:         outs(%[[OPERAND_SLICE]]
-//       CHECK:     %[[YIELD:.+]] = tensor.insert_slice %[[SORT_TILE]] into %[[INIT]][%[[IV]], 0]
-//  CHECK-SAME:         [%[[USED_TILESIZE]], %[[D1]]]
+//       CHECK:     %[[OPERAND_SLICE:.+]] = tensor.extract_slice %[[OPERAND]][%[[IV]], 0] [%[[USED_TILESIZE]], %[[D1]]]
+//       CHECK:     %[[INIT_SLICE:.+]] = tensor.extract_slice %[[INIT]][%[[IV]], 0] [%[[USED_TILESIZE]], %[[D1]]]
+//       CHECK:     %[[SORT_TILE:.+]] = iree_linalg_ext.sort dimension(1) ins(%[[OPERAND_SLICE]] : tensor<?x?xi32>) outs(%[[INIT_SLICE]] : tensor<?x?xi32>)
+//       CHECK:     %[[YIELD:.+]] = tensor.insert_slice %[[SORT_TILE]] into %[[INIT]][%[[IV]], 0] [%[[USED_TILESIZE]], %[[D1]]]
 //       CHECK:     scf.yield %[[YIELD]]
 //       CHECK:   return %[[RESULT]]
 
 // -----
 
 func.func @sort_2d_inner_parallel(%arg0: tensor<?x?xi32>) -> tensor<?x?xi32> {
+  %c0 = arith.constant 0 : index
+  %c1 = arith.constant 1 : index
+  %d0 = tensor.dim %arg0, %c0 : tensor<?x?xi32>
+  %d1 = tensor.dim %arg0, %c1 : tensor<?x?xi32>
+  %empty = tensor.empty(%d0, %d1) : tensor<?x?xi32>
   %0 = iree_linalg_ext.sort
        dimension(0)
-       outs(%arg0 : tensor<?x?xi32>) {
+       ins(%arg0 : tensor<?x?xi32>)
+       outs(%empty : tensor<?x?xi32>) {
        ^bb0(%arg2: i32, %arg3: i32):
          %0 = arith.cmpi sgt, %arg2, %arg3 : i32
          iree_linalg_ext.yield %0 : i1
@@ -331,15 +350,14 @@ module attributes { transform.with_named_sequence } {
 //   CHECK-DAG:   %[[C1:.+]] = arith.constant 1 : index
 //   CHECK-DAG:   %[[D0:.+]] = tensor.dim %[[OPERAND]], %[[C0]]
 //   CHECK-DAG:   %[[D1:.+]] = tensor.dim %[[OPERAND]], %[[C1]]
+//   CHECK-DAG:   %[[EMPTY:.+]] = tensor.empty(%[[D0]], %[[D1]]) : tensor<?x?xi32>
 //       CHECK:   %[[RESULT:.+]] = scf.for %[[IV:.+]] = %[[C0]] to %[[D1]] step %[[TILESIZE]]
-//  CHECK-SAME:       iter_args(%[[INIT:.+]] = %[[OPERAND]])
+//       CHECK:       iter_args(%[[INIT:.+]] = %[[EMPTY]])
 //   CHECK-DAG:     %[[USED_TILESIZE:.+]] = affine.min #[[MAP]](%[[IV]])[%[[D1]]]
-//       CHECK:     %[[OPERAND_SLICE:.+]] = tensor.extract_slice %[[INIT]][0, %[[IV]]]
-//  CHECK-SAME:         [%[[D0]], %[[USED_TILESIZE]]]
-//       CHECK:     %[[SORT_TILE:.+]] = iree_linalg_ext.sort
-//  CHECK-SAME:         outs(%[[OPERAND_SLICE]]
-//       CHECK:     %[[YIELD:.+]] = tensor.insert_slice %[[SORT_TILE]] into %[[INIT]][0, %[[IV]]]
-//  CHECK-SAME:         [%[[D0]], %[[USED_TILESIZE]]]
+//       CHECK:     %[[OPERAND_SLICE:.+]] = tensor.extract_slice %[[OPERAND]][0, %[[IV]]] [%[[D0]], %[[USED_TILESIZE]]]
+//       CHECK:     %[[INIT_SLICE:.+]] = tensor.extract_slice %[[INIT]][0, %[[IV]]] [%[[D0]], %[[USED_TILESIZE]]]
+//       CHECK:     %[[SORT_TILE:.+]] = iree_linalg_ext.sort dimension(0) ins(%[[OPERAND_SLICE]] : tensor<?x?xi32>) outs(%[[INIT_SLICE]] : tensor<?x?xi32>)
+//       CHECK:     %[[YIELD:.+]] = tensor.insert_slice %[[SORT_TILE]] into %[[INIT]][0, %[[IV]]] [%[[D0]], %[[USED_TILESIZE]]]
 //       CHECK:     scf.yield %[[YIELD]]
 //       CHECK:   return %[[RESULT]]
 
@@ -348,9 +366,17 @@ module attributes { transform.with_named_sequence } {
 func.func @sort_2d_multi_result(
     %arg0: tensor<?x?xi32>, %arg1: tensor<?x?xf32>)
     -> (tensor<?x?xi32>, tensor<?x?xf32>) {
+  %c0 = arith.constant 0 : index
+  %c1 = arith.constant 1 : index
+  %d0 = tensor.dim %arg0, %c0 : tensor<?x?xi32>
+  %d1 = tensor.dim %arg0, %c1 : tensor<?x?xi32>
+  %d2 = tensor.dim %arg1, %c0 : tensor<?x?xf32>
+  %d3 = tensor.dim %arg1, %c1 : tensor<?x?xf32>
+  %empty0 = tensor.empty(%d0, %d1) : tensor<?x?xi32>
+  %empty1 = tensor.empty(%d2, %d3) : tensor<?x?xf32>
   %0:2 = iree_linalg_ext.sort
        dimension(1)
-       outs(%arg0, %arg1 : tensor<?x?xi32>, tensor<?x?xf32>) {
+       ins(%arg0, %arg1 : tensor<?x?xi32>, tensor<?x?xf32>) outs(%empty0, %empty1 : tensor<?x?xi32>, tensor<?x?xf32>) {
        ^bb0(%arg2: i32, %arg3: i32, %arg4 : f32, %arg5 : f32):
          %1 = arith.cmpf ogt, %arg4, %arg5 : f32
          iree_linalg_ext.yield %1 : i1
@@ -368,24 +394,25 @@ module attributes { transform.with_named_sequence } {
 //       CHECK: func.func @sort_2d_multi_result(
 //  CHECK-SAME:   %[[OPERAND1:.+]]: tensor<?x?xi32>
 //  CHECK-SAME:   %[[OPERAND2:.+]]: tensor<?x?xf32>
-//   CHECK-DAG:   %[[TILESIZE:.+]] = arith.constant 10 : index
 //   CHECK-DAG:   %[[C0:.+]] = arith.constant 0 : index
 //   CHECK-DAG:   %[[C1:.+]] = arith.constant 1 : index
 //   CHECK-DAG:   %[[D0:.+]] = tensor.dim %[[OPERAND1]], %[[C0]]
 //   CHECK-DAG:   %[[D1:.+]] = tensor.dim %[[OPERAND1]], %[[C1]]
+//   CHECK-DAG:   %[[DIM_1:.+]] = tensor.dim %[[OPERAND2]], %[[C0]]
+//   CHECK-DAG:   %[[DIM_2:.+]] = tensor.dim %[[OPERAND2]], %[[C1]]
+//   CHECK-DAG:   %[[EMPTY0:.+]] = tensor.empty(%[[D0]], %[[D1]]) : tensor<?x?xi32>
+//   CHECK-DAG:   %[[EMPTY1:.+]] = tensor.empty(%[[DIM_1]], %[[DIM_2]]) : tensor<?x?xf32>
+//   CHECK-DAG:   %[[TILESIZE:.+]] = arith.constant 10 : index
 //       CHECK:   %[[RESULT:.+]]:2 = scf.for %[[IV:.+]] = %[[C0]] to %[[D0]] step %[[TILESIZE]]
-//  CHECK-SAME:       iter_args(%[[INIT1:.+]] = %[[OPERAND1]], %[[INIT2:.+]] = %[[OPERAND2]])
+//       CHECK:       iter_args(%[[INIT1:.+]] = %[[EMPTY0]], %[[INIT2:.+]] = %[[EMPTY1]])
 //   CHECK-DAG:     %[[USED_TILESIZE:.+]] = affine.min #[[MAP]](%[[IV]])[%[[D0]]]
-//       CHECK:     %[[OPERAND1_SLICE:.+]] = tensor.extract_slice %[[INIT1]][%[[IV]], 0]
-//  CHECK-SAME:         [%[[USED_TILESIZE]], %[[D1]]]
-//       CHECK:     %[[OPERAND2_SLICE:.+]] = tensor.extract_slice %[[INIT2]][%[[IV]], 0]
-//  CHECK-SAME:         [%[[USED_TILESIZE]], %[[D1]]]
-//       CHECK:     %[[SORT_TILE:.+]]:2 = iree_linalg_ext.sort
-//  CHECK-SAME:         outs(%[[OPERAND1_SLICE]], %[[OPERAND2_SLICE]]
-//       CHECK:     %[[YIELD1:.+]] = tensor.insert_slice %[[SORT_TILE]]#0 into %[[INIT1]][%[[IV]], 0]
-//  CHECK-SAME:         [%[[USED_TILESIZE]], %[[D1]]]
-//       CHECK:     %[[YIELD2:.+]] = tensor.insert_slice %[[SORT_TILE]]#1 into %[[INIT2]][%[[IV]], 0]
-//  CHECK-SAME:         [%[[USED_TILESIZE]], %[[D1]]]
+//       CHECK:     %[[OPERAND1_SLICE:.+]] = tensor.extract_slice %[[OPERAND1]][%[[IV]], 0] [%[[USED_TILESIZE]], %[[D1]]]
+//       CHECK:     %[[OPERAND2_SLICE:.+]] = tensor.extract_slice %[[OPERAND2]][%[[IV]], 0] [%[[USED_TILESIZE]], %[[D1]]]
+//       CHECK:     %[[INIT1_SLICE:.+]] = tensor.extract_slice %[[INIT1]][%[[IV]], 0] [%[[USED_TILESIZE]], %[[D1]]]
+//       CHECK:     %[[INIT2_SLICE:.+]] = tensor.extract_slice %[[INIT2]][%[[IV]], 0] [%[[USED_TILESIZE]], %[[D1]]]
+//       CHECK:     %[[SORT_TILE:.+]]:2 = iree_linalg_ext.sort dimension(1) ins(%[[OPERAND1_SLICE]], %[[OPERAND2_SLICE]] : tensor<?x?xi32>, tensor<?x?xf32>) outs(%[[INIT1_SLICE]], %[[INIT2_SLICE]] : tensor<?x?xi32>, tensor<?x?xf32>)
+//       CHECK:     %[[YIELD1:.+]] = tensor.insert_slice %[[SORT_TILE]]#0 into %[[INIT1]][%[[IV]], 0] [%[[USED_TILESIZE]], %[[D1]]]
+//       CHECK:     %[[YIELD2:.+]] = tensor.insert_slice %[[SORT_TILE]]#1 into %[[INIT2]][%[[IV]], 0] [%[[USED_TILESIZE]], %[[D1]]]
 //       CHECK:     scf.yield %[[YIELD1]], %[[YIELD2]]
 //       CHECK:   return %[[RESULT]]#0, %[[RESULT]]#1
 
@@ -395,6 +422,7 @@ func.func @sort_2d_multi_result_memref(
     %arg0: memref<?x?xi32>, %arg1: memref<?x?xf32>) {
   iree_linalg_ext.sort
      dimension(0)
+     ins(%arg0, %arg1 : memref<?x?xi32>, memref<?x?xf32>)
      outs(%arg0, %arg1 : memref<?x?xi32>, memref<?x?xf32>) {
      ^bb0(%arg2: i32, %arg3: i32, %arg4 : f32, %arg5 : f32):
        %0 = arith.cmpf ogt, %arg4, %arg5 : f32
@@ -2480,11 +2508,11 @@ module attributes { transform.with_named_sequence } {
 func.func @attention(%query: tensor<192x1024x64xf32>, %key: tensor<192x1024x64xf32>, %value: tensor<192x1024x64xf32>) -> tensor<192x1024x64xf32> {
   %0 = tensor.empty() : tensor<192x1024x64xf32>
   %scale = arith.constant 1.0 : f32
-  %1 = iree_linalg_ext.attention {indexing_maps = [affine_map<(d0, d1, d2, d3, d4) -> (d0, d1, d2)>,
+  %1 = iree_linalg_ext.attention <indexing_maps = [affine_map<(d0, d1, d2, d3, d4) -> (d0, d1, d2)>,
                      affine_map<(d0, d1, d2, d3, d4) -> (d0, d3, d2)>,
                      affine_map<(d0, d1, d2, d3, d4) -> (d0, d3, d4)>,
                      affine_map<(d0, d1, d2, d3, d4) -> ()>,
-                     affine_map<(d0, d1, d2, d3, d4) -> (d0, d1, d4)>]}
+                     affine_map<(d0, d1, d2, d3, d4) -> (d0, d1, d4)>]>
                      ins(%query, %key, %value, %scale : tensor<192x1024x64xf32>, tensor<192x1024x64xf32>, tensor<192x1024x64xf32>, f32) outs(%0 : tensor<192x1024x64xf32>) {
                       ^bb0(%score: f32):
                         iree_linalg_ext.yield %score: f32
@@ -2531,7 +2559,7 @@ module attributes { transform.with_named_sequence } {
 // CHECK:            %[[EXTRACTED_SLICE_2:.+]] = tensor.extract_slice %[[ARG6]][%[[ARG3]], %[[ARG5]], 0] [%[[D2]],
 // CHECK-SAME:         %[[D4]], 64] [1, 1, 1] : tensor<192x1024x64xf32> to tensor<?x?x64xf32>
 // CHECK:            %[[D5:.+]] = iree_linalg_ext.attention
-// CHECK-SAME:                     {indexing_maps = [#[[MAP_Q]], #[[MAP_K]], #[[MAP_V]], #[[MAP_S]], #[[MAP_O]]]}
+// CHECK-SAME:                     <indexing_maps = [#[[MAP_Q]], #[[MAP_K]], #[[MAP_V]], #[[MAP_S]], #[[MAP_O]]]>
 // CHECK-SAME:                    ins(%[[EXTRACTED_SLICE]], %[[EXTRACTED_SLICE_0]],
 // CHECK-SAME:         %[[EXTRACTED_SLICE_1]], %[[C1_F32]] : tensor<?x?x64xf32>, tensor<?x1024x64xf32>, tensor<?x1024x64xf32>, f32)
 // CHECK-SAME:         outs(%[[EXTRACTED_SLICE_2]] : tensor<?x?x64xf32>) {
@@ -2552,12 +2580,12 @@ module attributes { transform.with_named_sequence } {
 func.func @attention_float_mask(%query: tensor<192x1024x64xf32>, %key: tensor<192x1024x64xf32>, %value: tensor<192x1024x64xf32>, %mask: tensor<192x1024x1024xf32>) -> tensor<192x1024x64xf32> {
   %0 = tensor.empty() : tensor<192x1024x64xf32>
   %scale = arith.constant 1.0 : f32
-  %1 = iree_linalg_ext.attention {indexing_maps = [affine_map<(d0, d1, d2, d3, d4) -> (d0, d1, d2)>,
+  %1 = iree_linalg_ext.attention <indexing_maps = [affine_map<(d0, d1, d2, d3, d4) -> (d0, d1, d2)>,
                      affine_map<(d0, d1, d2, d3, d4) -> (d0, d3, d2)>,
                      affine_map<(d0, d1, d2, d3, d4) -> (d0, d3, d4)>,
                      affine_map<(d0, d1, d2, d3, d4) -> ()>,
                      affine_map<(d0, d1, d2, d3, d4) -> (d0, d1, d3)>,
-                     affine_map<(d0, d1, d2, d3, d4) -> (d0, d1, d4)>]}
+                     affine_map<(d0, d1, d2, d3, d4) -> (d0, d1, d4)>]>
                      ins(%query, %key, %value, %scale, %mask : tensor<192x1024x64xf32>, tensor<192x1024x64xf32>, tensor<192x1024x64xf32>, f32, tensor<192x1024x1024xf32>) outs(%0 : tensor<192x1024x64xf32>) {
                       ^bb0(%score: f32):
                         iree_linalg_ext.yield %score: f32
@@ -2607,7 +2635,7 @@ module attributes { transform.with_named_sequence } {
 // CHECK:            %[[EXTRACTED_SLICE_3:.+]] = tensor.extract_slice %[[ARG7]][%[[ARG4]], %[[ARG6]], 0] [%[[D3]],
 // CHECK-SAME:         %[[D4]], 64] [1, 1, 1] : tensor<192x1024x64xf32> to tensor<?x?x64xf32>
 // CHECK:            %[[D5:.+]] = iree_linalg_ext.attention
-// CHECK-SAME:                     {indexing_maps = [#[[MAP_Q]], #[[MAP_K]], #[[MAP_V]], #[[MAP_S]], #[[MAP_M]], #[[MAP_O]]]}
+// CHECK-SAME:                     <indexing_maps = [#[[MAP_Q]], #[[MAP_K]], #[[MAP_V]], #[[MAP_S]], #[[MAP_M]], #[[MAP_O]]]>
 // CHECK-SAME:                    ins(%[[EXTRACTED_SLICE]], %[[EXTRACTED_SLICE_0]],
 // CHECK-SAME:         %[[EXTRACTED_SLICE_1]], %[[C1_F32]], %[[EXTRACTED_SLICE_2]] : tensor<?x?x64xf32>, tensor<?x1024x64xf32>, tensor<?x1024x64xf32>, f32, tensor<?x?x1024xf32>)
 // CHECK-SAME:         outs(%[[EXTRACTED_SLICE_3]] : tensor<?x?x64xf32>)
@@ -2628,12 +2656,12 @@ module attributes { transform.with_named_sequence } {
 func.func @attention_bool_mask(%query: tensor<192x1024x64xf32>, %key: tensor<192x1024x64xf32>, %value: tensor<192x1024x64xf32>, %mask: tensor<192x1024x1024xi1>) -> tensor<192x1024x64xf32> {
   %0 = tensor.empty() : tensor<192x1024x64xf32>
   %scale = arith.constant 1.0 : f32
-  %1 = iree_linalg_ext.attention {indexing_maps = [affine_map<(d0, d1, d2, d3, d4) -> (d0, d1, d2)>,
+  %1 = iree_linalg_ext.attention <indexing_maps = [affine_map<(d0, d1, d2, d3, d4) -> (d0, d1, d2)>,
                      affine_map<(d0, d1, d2, d3, d4) -> (d0, d3, d2)>,
                      affine_map<(d0, d1, d2, d3, d4) -> (d0, d3, d4)>,
                      affine_map<(d0, d1, d2, d3, d4) -> ()>,
                      affine_map<(d0, d1, d2, d3, d4) -> (d0, d1, d3)>,
-                     affine_map<(d0, d1, d2, d3, d4) -> (d0, d1, d4)>]}
+                     affine_map<(d0, d1, d2, d3, d4) -> (d0, d1, d4)>]>
                      ins(%query, %key, %value, %scale, %mask : tensor<192x1024x64xf32>, tensor<192x1024x64xf32>, tensor<192x1024x64xf32>, f32, tensor<192x1024x1024xi1>) outs(%0 : tensor<192x1024x64xf32>) {
                       ^bb0(%score: f32):
                         iree_linalg_ext.yield %score: f32
@@ -2683,7 +2711,7 @@ module attributes { transform.with_named_sequence } {
 // CHECK:            %[[EXTRACTED_SLICE_3:.+]] = tensor.extract_slice %[[ARG7]][%[[ARG4]], %[[ARG6]], 0] [%[[D3]],
 // CHECK-SAME:         %[[D4]], 64] [1, 1, 1] : tensor<192x1024x64xf32> to tensor<?x?x64xf32>
 // CHECK:            %[[D5:.+]] = iree_linalg_ext.attention
-// CHECK-SAME:                     {indexing_maps = [#[[MAP_Q]], #[[MAP_K]], #[[MAP_V]], #[[MAP_S]], #[[MAP_M]], #[[MAP_O]]]}
+// CHECK-SAME:                     <indexing_maps = [#[[MAP_Q]], #[[MAP_K]], #[[MAP_V]], #[[MAP_S]], #[[MAP_M]], #[[MAP_O]]]>
 // CHECK-SAME:                    ins(%[[EXTRACTED_SLICE]], %[[EXTRACTED_SLICE_0]],
 // CHECK-SAME:         %[[EXTRACTED_SLICE_1]], %[[C1_F32]], %[[EXTRACTED_SLICE_2]] : tensor<?x?x64xf32>, tensor<?x1024x64xf32>, tensor<?x1024x64xf32>, f32, tensor<?x?x1024xi1>)
 // CHECK-SAME:         outs(%[[EXTRACTED_SLICE_3]] : tensor<?x?x64xf32>)
@@ -2703,11 +2731,11 @@ module attributes { transform.with_named_sequence } {
 
 func.func @attention_memref(%query: memref<192x1024x64xf32>, %key: memref<192x1024x64xf32>, %value: memref<192x1024x64xf32>, %output: memref<192x1024x64xf32>) {
   %scale = arith.constant 1.0 : f32
-  iree_linalg_ext.attention {indexing_maps = [affine_map<(d0, d1, d2, d3, d4) -> (d0, d1, d2)>,
+  iree_linalg_ext.attention <indexing_maps = [affine_map<(d0, d1, d2, d3, d4) -> (d0, d1, d2)>,
                      affine_map<(d0, d1, d2, d3, d4) -> (d0, d3, d2)>,
                      affine_map<(d0, d1, d2, d3, d4) -> (d0, d3, d4)>,
                      affine_map<(d0, d1, d2, d3, d4) -> ()>,
-                     affine_map<(d0, d1, d2, d3, d4) -> (d0, d1, d4)>]}
+                     affine_map<(d0, d1, d2, d3, d4) -> (d0, d1, d4)>]>
                      ins(%query, %key, %value, %scale : memref<192x1024x64xf32>, memref<192x1024x64xf32>, memref<192x1024x64xf32>, f32) outs(%output : memref<192x1024x64xf32>) {
                       ^bb0(%score: f32):
                         iree_linalg_ext.yield %score: f32
@@ -2751,7 +2779,7 @@ module attributes { transform.with_named_sequence } {
 // CHECK:            %[[SUBVIEW_2:.+]] = memref.subview %[[ARG3]][%[[ARG4]], %[[ARG5]], 0] [%[[D0]], %[[D1]], 64] [1, 1,
 // CHECK-SAME:         1] : memref<192x1024x64xf32> to memref<?x?x64xf32, strided<[65536, 64, 1], offset: ?>>
 // CHECK:            iree_linalg_ext.attention
-// CHECK-SAME:                     {indexing_maps = [#[[MAP_Q]], #[[MAP_K]], #[[MAP_V]], #[[MAP_S]], #[[MAP_O]]]}
+// CHECK-SAME:                     <indexing_maps = [#[[MAP_Q]], #[[MAP_K]], #[[MAP_V]], #[[MAP_S]], #[[MAP_O]]]>
 // CHECK-SAME:         ins(%[[SUBVIEW]], %[[SUBVIEW_0]], %[[SUBVIEW_1]], %[[C1_F32]] : memref<?x?x64xf32,
 // CHECK-SAME:         strided<[65536, 64, 1], offset: ?>>, memref<?x1024x64xf32, strided<[65536, 64, 1], offset: ?>>,
 // CHECK-SAME:         memref<?x1024x64xf32, strided<[65536, 64, 1], offset: ?>>, f32) outs(%[[SUBVIEW_2]] :
@@ -2769,12 +2797,12 @@ func.func @attention_fusion(
     %value: tensor<2x10x4096x64xf16>,
     %scale : f16, %bias : tensor<10x64xf16>) -> tensor<2x10x4096x64xf16> {
   %0 = tensor.empty() : tensor<2x10x4096x64xf16>
-  %1 = iree_linalg_ext.attention {
+  %1 = iree_linalg_ext.attention <
       indexing_maps = [affine_map<(d0, d1, d2, d3, d4, d5) -> (d0, d1, d2, d3)>,
                        affine_map<(d0, d1, d2, d3, d4, d5) -> (d0, d1, d4, d3)>,
                        affine_map<(d0, d1, d2, d3, d4, d5) -> (d0, d1, d4, d5)>,
                        affine_map<(d0, d1, d2, d3, d4, d5) -> ()>,
-                       affine_map<(d0, d1, d2, d3, d4, d5) -> (d0, d1, d2, d5)>]}
+                       affine_map<(d0, d1, d2, d3, d4, d5) -> (d0, d1, d2, d5)>]>
       ins(%query, %key, %value, %scale : tensor<2x10x4096x64xf16>, tensor<2x10x4096x64xf16>, tensor<2x10x4096x64xf16>, f16)
       outs(%0 : tensor<2x10x4096x64xf16>) {
                       ^bb0(%score: f32):
@@ -2840,7 +2868,7 @@ func.func @online_attention(%query: tensor<192x1024x64xf32>, %key: tensor<192x10
   %sum_fill = linalg.fill ins(%sum_ident : f32) outs(%row_red_empty : tensor<192x1024xf32>) -> tensor<192x1024xf32>
 
   %out:3 = iree_linalg_ext.online_attention
-        { indexing_maps = [#mapQ, #mapK, #mapV, #mapS, #mapO, #mapR, #mapR] }
+        < indexing_maps = [#mapQ, #mapK, #mapV, #mapS, #mapO, #mapR, #mapR] >
         ins(%query, %key, %value, %scale : tensor<192x1024x64xf32>, tensor<192x1024x64xf32>, tensor<192x1024x64xf32>, f32)
         outs(%output_fill, %acc_fill, %sum_fill : tensor<192x1024x64xf32>, tensor<192x1024xf32>, tensor<192x1024xf32>) {
                       ^bb0(%score: f32):
@@ -2872,7 +2900,7 @@ func.func @online_attention(%query: tensor<192x1024x64xf32>, %key: tensor<192x10
 // CHECK-DAG:  %[[M:.+]] = tensor.extract_slice %{{.*}}[%[[I0]], %[[I1]]] [4, 128] [1, 1] : tensor<192x1024xf32> to tensor<4x128xf32>
 // CHECK-DAG:  %[[S:.+]] = tensor.extract_slice %{{.*}}[%[[I0]], %[[I1]]] [4, 128] [1, 1] : tensor<192x1024xf32> to tensor<4x128xf32>
 // CHECK-DAG: iree_linalg_ext.online_attention
-// CHECK-SAME: {indexing_maps = [#[[$MAP0]], #[[$MAP1]], #[[$MAP2]], #[[$MAP3]], #[[$MAP4]], #[[$MAP5]], #[[$MAP5]]]}
+// CHECK-SAME: <indexing_maps = [#[[$MAP0]], #[[$MAP1]], #[[$MAP2]], #[[$MAP3]], #[[$MAP4]], #[[$MAP5]], #[[$MAP5]]]>
 // CHECK-SAME: ins(%[[Q]], %[[K]], %[[V]], %{{.*}} : tensor<4x128x64xf32>, tensor<4x1024x64xf32>, tensor<4x1024x32xf32>, f32)
 // CHECK-SAME: outs(%[[O]], %[[M]], %[[S]] : tensor<4x128x32xf32>, tensor<4x128xf32>, tensor<4x128xf32>)
 // CHECK: scf.forall.in_parallel
@@ -2914,7 +2942,7 @@ func.func @online_attention_partial_reduction(%query: tensor<192x?x64xf32>, %key
   %sum_fill = linalg.fill ins(%sum_ident : f32) outs(%row_red_empty : tensor<192x?xf32>) -> tensor<192x?xf32>
 
   %out:3 = iree_linalg_ext.online_attention
-        { indexing_maps = [#mapQ, #mapK, #mapV, #mapS, #mapO, #mapR, #mapR] }
+        < indexing_maps = [#mapQ, #mapK, #mapV, #mapS, #mapO, #mapR, #mapR] >
         ins(%query, %key, %value, %scale : tensor<192x?x64xf32>, tensor<192x?x64xf32>, tensor<192x?x64xf32>, f32)
         outs(%output_fill, %acc_fill, %sum_fill : tensor<192x?x64xf32>, tensor<192x?xf32>, tensor<192x?xf32>) {
                       ^bb0(%score: f32):
@@ -3623,7 +3651,7 @@ func.func @online_attention_float_mask(%query: tensor<192x1024x64xf32>,
 
   // Adjust the operation to correctly handle the mask
   %out:3 = iree_linalg_ext.online_attention
-        { indexing_maps = [#mapQ, #mapK, #mapV, #mapS, #mapM, #mapO, #mapR, #mapR] }
+        < indexing_maps = [#mapQ, #mapK, #mapV, #mapS, #mapM, #mapO, #mapR, #mapR] >
         ins(%query, %key, %value, %scale, %mask : tensor<192x1024x64xf32>, tensor<192x1024x64xf32>, tensor<192x1024x64xf32>, f32, tensor<192x1024x1024xf32>)
         outs(%output_fill, %acc_fill, %sum_fill : tensor<192x1024x64xf32>, tensor<192x1024xf32>, tensor<192x1024xf32>) {
                       ^bb0(%score: f32):
@@ -3657,7 +3685,7 @@ func.func @online_attention_float_mask(%query: tensor<192x1024x64xf32>,
 // CHECK-DAG:  %[[M:.+]] = tensor.extract_slice %{{.*}}[%[[I0]], %[[I1]]] [4, 128] [1, 1] : tensor<192x1024xf32> to tensor<4x128xf32>
 // CHECK-DAG:  %[[S:.+]] = tensor.extract_slice %{{.*}}[%[[I0]], %[[I1]]] [4, 128] [1, 1] : tensor<192x1024xf32> to tensor<4x128xf32>
 // CHECK-DAG: iree_linalg_ext.online_attention
-// CHECK-SAME: {indexing_maps = [#[[$MAP0]], #[[$MAP1]], #[[$MAP2]], #[[$MAP3]], #[[$MAP4]], #[[$MAP5]], #[[$MAP6]], #[[$MAP6]]]}
+// CHECK-SAME: <indexing_maps = [#[[$MAP0]], #[[$MAP1]], #[[$MAP2]], #[[$MAP3]], #[[$MAP4]], #[[$MAP5]], #[[$MAP6]], #[[$MAP6]]]>
 // CHECK-SAME: ins(%[[Q]], %[[K]], %[[V]], %{{.*}}, %[[MASK]] : tensor<4x128x64xf32>, tensor<4x1024x64xf32>, tensor<4x1024x32xf32>, f32, tensor<4x128x1024xf32>)
 // CHECK-SAME: outs(%[[O]], %[[M]], %[[S]] : tensor<4x128x32xf32>, tensor<4x128xf32>, tensor<4x128xf32>)
 // CHECK: scf.forall.in_parallel
@@ -3699,7 +3727,7 @@ func.func @online_attention_bool_mask(%query: tensor<192x1024x64xf32>,
 
   // Adjust the operation to correctly handle the mask
   %out:3 = iree_linalg_ext.online_attention
-        { indexing_maps = [#mapQ, #mapK, #mapV, #mapS, #mapM, #mapO, #mapR, #mapR] }
+        < indexing_maps = [#mapQ, #mapK, #mapV, #mapS, #mapM, #mapO, #mapR, #mapR] >
         ins(%query, %key, %value, %scale, %mask : tensor<192x1024x64xf32>, tensor<192x1024x64xf32>, tensor<192x1024x64xf32>, f32, tensor<192x1024x1024xi1>)
         outs(%output_fill, %acc_fill, %sum_fill : tensor<192x1024x64xf32>, tensor<192x1024xf32>, tensor<192x1024xf32>) {
                       ^bb0(%score: f32):
@@ -3734,7 +3762,7 @@ func.func @online_attention_bool_mask(%query: tensor<192x1024x64xf32>,
 // CHECK-DAG:  %[[M:.+]] = tensor.extract_slice %{{.*}}[%[[I0]], %[[I1]]] [4, 128] [1, 1] : tensor<192x1024xf32> to tensor<4x128xf32>
 // CHECK-DAG:  %[[S:.+]] = tensor.extract_slice %{{.*}}[%[[I0]], %[[I1]]] [4, 128] [1, 1] : tensor<192x1024xf32> to tensor<4x128xf32>
 // CHECK-DAG: iree_linalg_ext.online_attention
-// CHECK-SAME: {indexing_maps = [#[[$MAP0]], #[[$MAP1]], #[[$MAP2]], #[[$MAP3]], #[[$MAP4]], #[[$MAP5]], #[[$MAP6]], #[[$MAP6]]]}
+// CHECK-SAME: <indexing_maps = [#[[$MAP0]], #[[$MAP1]], #[[$MAP2]], #[[$MAP3]], #[[$MAP4]], #[[$MAP5]], #[[$MAP6]], #[[$MAP6]]]>
 // CHECK-SAME: ins(%[[Q]], %[[K]], %[[V]], %{{.*}}, %[[MASK]] : tensor<4x128x64xf32>, tensor<4x1024x64xf32>, tensor<4x1024x32xf32>, f32, tensor<4x128x1024xi1>)
 // CHECK-SAME: outs(%[[O]], %[[M]], %[[S]] : tensor<4x128x32xf32>, tensor<4x128xf32>, tensor<4x128xf32>)
 // CHECK: scf.forall.in_parallel
@@ -4493,6 +4521,240 @@ module attributes { transform.with_named_sequence } {
   transform.named_sequence @__transform_main(%module_op: !transform.any_op {transform.readonly}) {
     %0 = transform.structured.match ops{["tensor.concat"]} in %module_op : (!transform.any_op) -> !transform.any_op
     %1, %loops:2 = transform.structured.tile_using_for %0 tile_sizes [10, 64] : (!transform.any_op) -> (!transform.any_op, !transform.any_op, !transform.any_op)
+    transform.yield
+  }
+}
+
+// -----
+
+// An explicit full-axis tile has an induction-variable offset before the
+// single-iteration loop is folded.
+func.func @sort_full_axis_tensor(%arg0: tensor<4xi32>) -> tensor<4xi32> {
+  %empty = tensor.empty() : tensor<4xi32>
+  %sorted = iree_linalg_ext.sort dimension(0) ins(%arg0 : tensor<4xi32>) outs(%empty : tensor<4xi32>) {
+  ^bb0(%lhs: i32, %rhs: i32):
+    %cmp = arith.cmpi sle, %lhs, %rhs : i32
+    iree_linalg_ext.yield %cmp : i1
+  } -> tensor<4xi32>
+  return %sorted : tensor<4xi32>
+}
+module attributes { transform.with_named_sequence } {
+  transform.named_sequence @__transform_main(%module_op: !transform.any_op {transform.readonly}) {
+    %sort = transform.structured.match ops{["iree_linalg_ext.sort"]} in %module_op : (!transform.any_op) -> !transform.any_op
+    %tiled, %loop = transform.structured.tile_using_for %sort tile_sizes [4] : (!transform.any_op) -> (!transform.any_op, !transform.any_op)
+    transform.yield
+  }
+}
+// CHECK-LABEL: func.func @sort_full_axis_tensor
+// CHECK: iree_linalg_ext.sort dimension(0) ins(
+// CHECK-SAME: outs(%{{.+}} : tensor<4xi32>)
+// CHECK: return
+
+// -----
+
+func.func @sort_full_axis_memref(%arg0: memref<4xi32>) {
+  iree_linalg_ext.sort dimension(0) ins(%arg0 : memref<4xi32>) outs(%arg0 : memref<4xi32>) {
+  ^bb0(%lhs: i32, %rhs: i32):
+    %cmp = arith.cmpi sle, %lhs, %rhs : i32
+    iree_linalg_ext.yield %cmp : i1
+  }
+  return
+}
+module attributes { transform.with_named_sequence } {
+  transform.named_sequence @__transform_main(%module_op: !transform.any_op {transform.readonly}) {
+    %sort = transform.structured.match ops{["iree_linalg_ext.sort"]} in %module_op : (!transform.any_op) -> !transform.any_op
+    %tiled, %loop = transform.structured.tile_using_for %sort tile_sizes [4] : (!transform.any_op) -> (!transform.any_op, !transform.any_op)
+    transform.yield
+  }
+}
+// CHECK-LABEL: func.func @sort_full_axis_memref
+// CHECK: iree_linalg_ext.sort dimension(0) ins(
+// CHECK-SAME: outs(%{{.+}} : memref<4xi32{{.*}}>)
+// CHECK: return
+
+// -----
+
+// Sorting each part of the sort dimension cannot implement a full sort.
+func.func @sort_partial_axis(%arg0: tensor<4xi32>) -> tensor<4xi32> {
+  %empty = tensor.empty() : tensor<4xi32>
+  // expected-error @+1 {{failed to generate tiling loops}}
+  %sorted = iree_linalg_ext.sort dimension(0) ins(%arg0 : tensor<4xi32>) outs(%empty : tensor<4xi32>) {
+  ^bb0(%lhs: i32, %rhs: i32):
+    %cmp = arith.cmpi sle, %lhs, %rhs : i32
+    iree_linalg_ext.yield %cmp : i1
+  } -> tensor<4xi32>
+  return %sorted : tensor<4xi32>
+}
+module attributes { transform.with_named_sequence } {
+  transform.named_sequence @__transform_main(%module_op: !transform.any_op {transform.readonly}) {
+    %sort = transform.structured.match ops{["iree_linalg_ext.sort"]} in %module_op : (!transform.any_op) -> !transform.any_op
+    %tiled, %loop = transform.structured.tile_using_for %sort tile_sizes [2] : (!transform.any_op) -> (!transform.any_op, !transform.any_op)
+    transform.yield
+  }
+}
+
+// -----
+
+// Buffer-form Sort has no result positions through which to reject this tile.
+func.func @sort_partial_axis_memref(%arg0: memref<4xi32>) {
+  // expected-error @+2 {{failed to tile operation}}
+  // expected-error @+1 {{failed to generate tiling loops}}
+  iree_linalg_ext.sort dimension(0) ins(%arg0 : memref<4xi32>) outs(%arg0 : memref<4xi32>) {
+  ^bb0(%lhs: i32, %rhs: i32):
+    %cmp = arith.cmpi sle, %lhs, %rhs : i32
+    iree_linalg_ext.yield %cmp : i1
+  }
+  return
+}
+module attributes { transform.with_named_sequence } {
+  transform.named_sequence @__transform_main(%module_op: !transform.any_op {transform.readonly}) {
+    %sort = transform.structured.match ops{["iree_linalg_ext.sort"]} in %module_op : (!transform.any_op) -> !transform.any_op
+    %tiled, %loop = transform.structured.tile_using_for %sort tile_sizes [2] : (!transform.any_op) -> (!transform.any_op, !transform.any_op)
+    transform.yield
+  }
+}
+
+// -----
+
+// An explicit dynamic full-axis tile is a single iteration, even when its
+// upper bound and step are distinct SSA values for the same dimension.
+func.func @sort_dynamic_full_axis(%arg0: tensor<?xi32>) -> tensor<?xi32> {
+  %c0 = arith.constant 0 : index
+  %n = tensor.dim %arg0, %c0 : tensor<?xi32>
+  %empty = tensor.empty(%n) : tensor<?xi32>
+  %sorted = iree_linalg_ext.sort dimension(0) ins(%arg0 : tensor<?xi32>) outs(%empty : tensor<?xi32>) {
+  ^bb0(%lhs: i32, %rhs: i32):
+    %cmp = arith.cmpi sle, %lhs, %rhs : i32
+    iree_linalg_ext.yield %cmp : i1
+  } -> tensor<?xi32>
+  return %sorted : tensor<?xi32>
+}
+module attributes { transform.with_named_sequence } {
+  transform.named_sequence @__transform_main(%module_op: !transform.any_op {transform.readonly}) {
+    %sort = transform.structured.match ops{["iree_linalg_ext.sort"]} in %module_op : (!transform.any_op) -> !transform.any_op
+    %size = transform.structured.match ops{["tensor.dim"]} in %module_op : (!transform.any_op) -> !transform.any_op
+    %tiled, %loop = transform.structured.tile_using_for %sort tile_sizes [%size] : (!transform.any_op, !transform.any_op) -> (!transform.any_op, !transform.any_op)
+    transform.yield
+  }
+}
+// CHECK-LABEL: func.func @sort_dynamic_full_axis
+// CHECK: %[[N:.+]] = tensor.dim
+// CHECK: scf.for %{{.+}} = %{{.+}} to %[[N]] step %[[N]]
+// CHECK: iree_linalg_ext.sort dimension(0)
+// CHECK-SAME: outs(%{{.+}} : tensor<?xi32>)
+// CHECK: return
+
+// -----
+
+// A tile size larger than the dimension also generates a single full tile.
+func.func @sort_dynamic_full_axis_memref(%arg0: memref<?xi32>) {
+  %c0 = arith.constant 0 : index
+  %c1 = arith.constant 1 : index
+  %n = memref.dim %arg0, %c0 : memref<?xi32>
+  %step = arith.addi %n, %c1 : index
+  iree_linalg_ext.sort dimension(0) ins(%arg0 : memref<?xi32>) outs(%arg0 : memref<?xi32>) {
+  ^bb0(%lhs: i32, %rhs: i32):
+    %cmp = arith.cmpi sle, %lhs, %rhs : i32
+    iree_linalg_ext.yield %cmp : i1
+  }
+  return
+}
+module attributes { transform.with_named_sequence } {
+  transform.named_sequence @__transform_main(%module_op: !transform.any_op {transform.readonly}) {
+    %sort = transform.structured.match ops{["iree_linalg_ext.sort"]} in %module_op : (!transform.any_op) -> !transform.any_op
+    %size = transform.structured.match ops{["arith.addi"]} in %module_op : (!transform.any_op) -> !transform.any_op
+    %tiled, %loop = transform.structured.tile_using_for %sort tile_sizes [%size] : (!transform.any_op, !transform.any_op) -> (!transform.any_op, !transform.any_op)
+    transform.yield
+  }
+}
+// CHECK-LABEL: func.func @sort_dynamic_full_axis_memref
+// CHECK: %[[N:.+]] = memref.dim
+// CHECK: %[[STEP:.+]] = arith.addi %[[N]],
+// CHECK: scf.for %{{.+}} = %{{.+}} to %[[N]] step %[[STEP]]
+// CHECK: iree_linalg_ext.sort dimension(0)
+// CHECK-SAME: outs(%{{.+}} : memref<?xi32{{.*}}>)
+// CHECK: return
+
+// -----
+
+// A full-axis tile must be accepted by the parallel tiler as well.
+func.func @sort_dynamic_full_axis_forall(%arg0: tensor<?xi32>) -> tensor<?xi32> {
+  %c0 = arith.constant 0 : index
+  %n = tensor.dim %arg0, %c0 : tensor<?xi32>
+  %empty = tensor.empty(%n) : tensor<?xi32>
+  %sorted = iree_linalg_ext.sort dimension(0) ins(%arg0 : tensor<?xi32>) outs(%empty : tensor<?xi32>) {
+  ^bb0(%lhs: i32, %rhs: i32):
+    %cmp = arith.cmpi sle, %lhs, %rhs : i32
+    iree_linalg_ext.yield %cmp : i1
+  } -> tensor<?xi32>
+  return %sorted : tensor<?xi32>
+}
+module attributes { transform.with_named_sequence } {
+  transform.named_sequence @__transform_main(%module_op: !transform.any_op {transform.readonly}) {
+    %sort = transform.structured.match ops{["iree_linalg_ext.sort"]} in %module_op : (!transform.any_op) -> !transform.any_op
+    %size = transform.structured.match ops{["tensor.dim"]} in %module_op : (!transform.any_op) -> !transform.any_op
+    %tiled, %loop = transform.structured.tile_using_forall %sort tile_sizes [%size] : (!transform.any_op, !transform.any_op) -> (!transform.any_op, !transform.any_op)
+    transform.yield
+  }
+}
+// CHECK-LABEL: func.func @sort_dynamic_full_axis_forall
+// CHECK: scf.forall
+// CHECK: iree_linalg_ext.sort dimension(0)
+// CHECK-SAME: outs(%{{.+}} : tensor<?xi32>)
+// CHECK: return
+
+// -----
+
+// A dynamic tile larger than the full axis must also remain legal.
+func.func @sort_dynamic_oversized_axis_forall(%arg0: tensor<?xi32>) -> tensor<?xi32> {
+  %c0 = arith.constant 0 : index
+  %n = tensor.dim %arg0, %c0 : tensor<?xi32>
+  %step = arith.addi %n, %n : index
+  %empty = tensor.empty(%n) : tensor<?xi32>
+  %sorted = iree_linalg_ext.sort dimension(0) ins(%arg0 : tensor<?xi32>) outs(%empty : tensor<?xi32>) {
+  ^bb0(%lhs: i32, %rhs: i32):
+    %cmp = arith.cmpi sle, %lhs, %rhs : i32
+    iree_linalg_ext.yield %cmp : i1
+  } -> tensor<?xi32>
+  return %sorted : tensor<?xi32>
+}
+module attributes { transform.with_named_sequence } {
+  transform.named_sequence @__transform_main(%module_op: !transform.any_op {transform.readonly}) {
+    %sort = transform.structured.match ops{["iree_linalg_ext.sort"]} in %module_op : (!transform.any_op) -> !transform.any_op
+    %size = transform.structured.match ops{["arith.addi"]} in %module_op : (!transform.any_op) -> !transform.any_op
+    %tiled, %loop = transform.structured.tile_using_forall %sort tile_sizes [%size] : (!transform.any_op, !transform.any_op) -> (!transform.any_op, !transform.any_op)
+    transform.yield
+  }
+}
+// CHECK-LABEL: func.func @sort_dynamic_oversized_axis_forall
+// CHECK: scf.forall
+// CHECK: iree_linalg_ext.sort dimension(0)
+// CHECK-SAME: outs(%{{.+}} : tensor<?xi32>)
+// CHECK: return
+
+// -----
+
+// Multiple sorting-axis tiles cannot implement a complete sort.
+func.func @sort_dynamic_partial_axis_forall(%arg0: tensor<?xi32>) -> tensor<?xi32> {
+  %c0 = arith.constant 0 : index
+  %n = tensor.dim %arg0, %c0 : tensor<?xi32>
+  %step = affine.apply affine_map<(d0) -> (d0 ceildiv 2)>(%n)
+  %empty = tensor.empty(%n) : tensor<?xi32>
+  // expected-error @+2 {{failed to generate tiling loops}}
+  // expected-note @+1 {{when applied to this op}}
+  %sorted = iree_linalg_ext.sort dimension(0) ins(%arg0 : tensor<?xi32>) outs(%empty : tensor<?xi32>) {
+  ^bb0(%lhs: i32, %rhs: i32):
+    %cmp = arith.cmpi sle, %lhs, %rhs : i32
+    iree_linalg_ext.yield %cmp : i1
+  } -> tensor<?xi32>
+  return %sorted : tensor<?xi32>
+}
+module attributes { transform.with_named_sequence } {
+  transform.named_sequence @__transform_main(%module_op: !transform.any_op {transform.readonly}) {
+    %sort = transform.structured.match ops{["iree_linalg_ext.sort"]} in %module_op : (!transform.any_op) -> !transform.any_op
+    %size = transform.structured.match ops{["affine.apply"]} in %module_op : (!transform.any_op) -> !transform.any_op
+    // expected-error @+1 {{tile_using_forall failed to apply}}
+    %tiled, %loop = transform.structured.tile_using_forall %sort tile_sizes [%size] : (!transform.any_op, !transform.any_op) -> (!transform.any_op, !transform.any_op)
     transform.yield
   }
 }

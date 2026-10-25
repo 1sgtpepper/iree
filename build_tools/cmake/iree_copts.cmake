@@ -232,6 +232,10 @@ iree_select_compiler_opts(IREE_DEFAULT_COPTS
     "-Wno-unused-but-set-variable"
     "-Wno-misleading-indentation"
 
+  GCC_LT_12
+    # False positives GCC 11 on SmallDenseMap instantiations. Fixed in GCC 12
+    $<$<COMPILE_LANGUAGE:CXX>:-Wno-error=array-bounds>
+
   GCC_GTE_13
     # False positives? Not useful? https://stackoverflow.com/a/78760067
     $<$<COMPILE_LANGUAGE:CXX>:-Wno-dangling-reference>
@@ -582,5 +586,16 @@ endif()
 if(IREE_BUILD_COMPILER)
   # iree-tblgen is not defined using the add_tablegen mechanism as other
   # TableGen tools in LLVM.
-  set(IREE_TABLEGEN_EXE "$<TARGET_FILE:iree-tblgen>")
+  if(IREE_HOST_BIN_DIR)
+    find_program(IREE_TABLEGEN_EXE
+      NAMES iree-tblgen
+      PATHS "${IREE_HOST_BIN_DIR}"
+      NO_DEFAULT_PATH
+      NO_CMAKE_FIND_ROOT_PATH
+      NO_CACHE
+      REQUIRED
+    )
+  else()
+    set(IREE_TABLEGEN_EXE "$<TARGET_FILE:iree-tblgen>")
+  endif()
 endif()

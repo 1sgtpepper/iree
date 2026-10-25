@@ -57,11 +57,13 @@ iree_cc_library(
     MLIRInferTypeOpInterface
     MLIRLinalgDialect
     MLIRLinalgStructuredOpsIncGenLib
+    MLIRLinalgTransforms
     MLIRLinalgUtils
     MLIRMathDialect
     MLIRMemRefDialect
     MLIRPass
     MLIRSCFDialect
+    MLIRSCFUtils
     MLIRSideEffectInterfaces
     MLIRSupport
     MLIRTensorDialect

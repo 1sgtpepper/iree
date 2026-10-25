@@ -14,7 +14,7 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - name: Checking out repository
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           token: ${{ secrets.WRITE_ACCESS_TOKEN }}
 
@@ -81,7 +81,7 @@ jobs:
           token: ${{ secrets.WRITE_ACCESS_TOKEN }}
 
       - name: "Invoke workflow :: Build Release Packages"
-        uses: benc-uk/workflow-dispatch@31e2b3319479a63f0ab15bf800eff9e913504e26 # v1.3.2
+        uses: benc-uk/workflow-dispatch@d004979be141727c7a17c28f603e2facc40d0855 # v1.3.3
         with:
           workflow: Build Release Packages
           token: ${{ secrets.WRITE_ACCESS_TOKEN }}

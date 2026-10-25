@@ -14,10 +14,13 @@ iree_cc_library(
   NAME
     DispatchCreation
   HDRS
+    "CollapseDimensions.h"
     "FusionUtils.h"
+    "MaterializedLayoutTarget.h"
     "Passes.h"
   SRCS
     "AnnotateDataTilingHints.cpp"
+    "AssignDataTilingEncodings.cpp"
     "BitcastUnsupportedElementTypes.cpp"
     "BubbleUpExpandShapes.cpp"
     "CloneProducersIntoDispatchRegions.cpp"
@@ -40,6 +43,7 @@ iree_cc_library(
     "HoistUniformScalarCompute.cpp"
     "InsertTensorBarriers.cpp"
     "MaterializeDefaultWorkgroupCountRegion.cpp"
+    "MaterializedLayoutTarget.cpp"
     "Passes.cpp"
     "PropagateEncodings.cpp"
     "RemoveTensorBarriers.cpp"
@@ -81,11 +85,14 @@ iree_cc_library(
     MLIRTransforms
     iree::compiler::Codegen::Common
     iree::compiler::Codegen::Dialect::Codegen::IR::IREECodegenDialect
+    iree::compiler::Codegen::Dialect::Codegen::Utils
     iree::compiler::Dialect::Encoding::IR
     iree::compiler::Dialect::Encoding::Utils
     iree::compiler::Dialect::Flow::Conversion::TensorToFlow
     iree::compiler::Dialect::Flow::IR
     iree::compiler::Dialect::Flow::Transforms
+    iree::compiler::Dialect::HAL::Analysis
+    iree::compiler::Dialect::HAL::IR
     iree::compiler::Dialect::LinalgExt::IR
     iree::compiler::Dialect::LinalgExt::Transforms
     iree::compiler::Dialect::LinalgExt::Utils

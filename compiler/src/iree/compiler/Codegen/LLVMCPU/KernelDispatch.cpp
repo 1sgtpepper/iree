@@ -6,12 +6,14 @@
 
 #include "iree/compiler/Codegen/LLVMCPU/KernelDispatch.h"
 
+#include "iree/compiler/Codegen/Common/TileAndFuseUtils.h"
 #include "iree/compiler/Codegen/Dialect/CPU/IR/IREECPUTypes.h"
 #include "iree/compiler/Codegen/Dialect/Codegen/IR/IREECodegenAttrs.h"
 #include "iree/compiler/Codegen/Dialect/Codegen/IR/IREECodegenEnums.h"
 #include "iree/compiler/Codegen/Dialect/Codegen/IR/IREECodegenInterfaces.h"
 #include "iree/compiler/Codegen/Dialect/Codegen/IR/IREECodegenOps.h"
 #include "iree/compiler/Codegen/Dialect/Codegen/IR/IREECodegenTypes.h"
+#include "iree/compiler/Codegen/Dialect/Codegen/Utils/Utils.h"
 #include "iree/compiler/Codegen/Interfaces/PartitionableLoopsInterface.h"
 #include "iree/compiler/Codegen/LLVMCPU/LLVMCPUSelectUKernels.h"
 #include "iree/compiler/Codegen/LLVMCPU/TargetMLTransformInfo.h"
@@ -27,6 +29,7 @@
 #include "iree/compiler/Dialect/TensorExt/IR/TensorExtOps.h"
 #include "llvm/ADT/EquivalenceClasses.h"
 #include "llvm/ADT/STLExtras.h"
+#include "llvm/ADT/STLForwardCompat.h"
 #include "llvm/ADT/SmallVectorExtras.h"
 #include "llvm/ADT/TypeSwitch.h"
 #include "llvm/Support/CommandLine.h"
@@ -54,8 +57,10 @@
 #include "mlir/Interfaces/TilingInterface.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 
+#include <cstdint>
 #include <numeric>
 #include <optional>
+#include <type_traits>
 
 #define DEBUG_TYPE "kernel-dispatch"
 
@@ -610,6 +615,15 @@ static int64_t roundUpToPow2(int64_t size, bool predicate) {
   }
   assert(size > 0 && "Negative size");
   return llvm::PowerOf2Ceil(size);
+}
+
+/// Returns the maximum vscale recorded on the target, or 0 if no `vscale_range`
+/// is set.
+static int64_t getVscaleMax(IREE::HAL::ExecutableTargetAttr targetAttr) {
+  if (auto range = getVscaleRange(targetAttr)) {
+    return static_cast<int64_t>(range->vscaleMax);
+  }
+  return 0;
 }
 
 /// Computes the maximum tile size that can be used to distribute a dimension
@@ -1371,7 +1385,9 @@ static void getMatmulVectorSizesUsingFillRegisterFileHeuristic(
   auto targetAttr = IREE::HAL::ExecutableTargetAttr::lookup(op);
   scalableSizeFlags.resize(3, false);
   if (isScalableVectorizationEnabled() &&
-      hasAnySVEFeature(targetAttr.getConfiguration())) {
+      (hasAnySVEFeature(targetAttr.getConfiguration()) ||
+       (hasSMEFeature(targetAttr.getConfiguration()) &&
+        isArmStreamingForced()))) {
     scalableSizeFlags[1] = true;
   }
 }
@@ -2032,12 +2048,14 @@ static LogicalResult setRootConfig(mlir::FunctionOpInterface entryPointFn,
 
   int srcRank = op.getSourceRank();
   SmallVector<int64_t> innerTiles = op.getStaticTiles();
+  IREE::Codegen::ScalableTileFlags scalableFlags(innerTiles.size(), false);
   // Try to infer scalable tile sizes. This is a no-op in case of static inner
   // tiles or if dynamic tile sizes are found, but scalable tile sizes cannot be
   // inferred.
   if (auto sizesAndScalableFlags =
           getScalableTileSizesAndFlags(op.getMixedTiles())) {
     innerTiles = sizesAndScalableFlags->first;
+    scalableFlags = sizesAndScalableFlags->second;
   }
   ArrayRef<int64_t> dimPos = op.getInnerDimsPos();
   int64_t vectorSize = getVectorSize(entryPointFn, op.getSourceType());
@@ -2070,6 +2088,17 @@ static LogicalResult setRootConfig(mlir::FunctionOpInterface entryPointFn,
     pipelineConfig = getPipelineConfWithDecompositionAttr(op.getContext());
   }
 
+  // For scalable inner tiles, the distribution tile on the packed dim must be a
+  // multiple of the largest possible inner tile (base * vscaleMax).
+  int64_t vscaleMax = getVscaleMax(target);
+  for (auto [pos, size, scalable] :
+       llvm::zip_equal(dimPos, innerTiles, scalableFlags)) {
+    if (!scalable || distTileSizes[pos] == 0 || ShapedType::isDynamic(size)) {
+      continue;
+    }
+    distTileSizes[pos] = llvm::alignTo(distTileSizes[pos], size * vscaleMax);
+  }
+
   SmallVector<int64_t> vecTileSizes = getPackVectorTileSizes(entryPointFn, op);
   LoweringConfigGenerator generator(op);
   generator.setDistributionTileSizes(distTileSizes);
@@ -2100,20 +2129,20 @@ static LogicalResult setRootConfig(mlir::FunctionOpInterface entryPointFn,
     innerTiles = sizesAndScalableFlags->first;
     scalableFlags = sizesAndScalableFlags->second;
   }
-  // Fixup for making distTileSizes be multiple of inner_tile_sizes.
-  // In case of scalable tile sizes, we align the distribution tile size with
-  // the static constant of the scalable tile size and round up to the next
-  // power of 2. Since vscale is a power of 2, this makes sure
-  // that the selected distribution size is divisible by or less than the
-  // effective scalable inner tile size.
+  // Align distribution tile sizes to inner tile sizes. For
+  // scalable inner tiles, align to the largest possible inner tile
+  // (base * vscaleMax) so the distribution tile stays a whole multiple of the
+  // runtime inner tile for any vscale.
   ArrayRef<int64_t> dimPos = op.getInnerDimsPos();
+  int64_t vscaleMax =
+      getVscaleMax(IREE::HAL::ExecutableTargetAttr::lookup(entryPointFn));
   for (auto [pos, size, scalable] :
        llvm::zip_equal(dimPos, innerTiles, scalableFlags)) {
     if (distTileSizes[pos] == 0 || ShapedType::isDynamic(size)) {
       continue;
     }
-    int64_t alignedTileSize = llvm::alignTo(distTileSizes[pos], size);
-    distTileSizes[pos] = roundUpToPow2(alignedTileSize, scalable);
+    int64_t multiplier = scalable ? vscaleMax : 1;
+    distTileSizes[pos] = llvm::alignTo(distTileSizes[pos], size * multiplier);
   }
 
   SmallVector<int64_t> vecTileSizes(op.getDestRank(), 1);
@@ -3114,6 +3143,84 @@ static LogicalResult setRootConfig(mlir::FunctionOpInterface entryPointFn,
       getCPUTranslationInfo(op.getContext(), CPUPipeline::Mmt4dTilingExpert));
 }
 
+/// Assigns lowering config to the data-tiled convolution generic.
+static LogicalResult
+setConvDataTiledGenericRootConfig(mlir::FunctionOpInterface entryPointFn,
+                                  linalg::GenericOp convOp) {
+  IREE::HAL::ExecutableTargetAttr targetAttr =
+      IREE::HAL::ExecutableTargetAttr::lookup(convOp);
+  bool useUkernel =
+      targetAttr && hasUkernel(targetAttr.getConfiguration(), "conv_nchwc");
+
+  // Loop ranges:
+  //  (d0, d1,    d2, d3, d4,    d5, d6, d7, d8)
+  //  (n,  OC/k0, OH, OW, IC/c0, FH, FW, k0, c0)
+  SmallVector<int64_t, 9> loopRanges =
+      cast<linalg::LinalgOp>(convOp.getOperation()).getStaticLoopRanges();
+  int64_t k0 = loopRanges[7];
+  int64_t c0 = loopRanges[8];
+
+  // Vectorization strategy:
+  // - Vectorize across OW, the register-blocking dimension: the kernel
+  //   carries one accumulator vector per OW element to hide FMA latency.
+  //   Use k0 as the OW tile size for now; it matches the desired
+  //   accumulator count on current targets (16 for AVX-512, 8 for NEON).
+  //   TODO(phemashekar): Derive this directly from the target register budget
+  //   instead.
+  // - Vectorize across the data-tiling inner dims oc_inner (k0) and
+  //   ic_inner (c0).
+  SmallVector<int64_t> vecTileSizes(9, 1);
+  vecTileSizes[3] = k0;
+  vecTileSizes[7] = k0;
+  vecTileSizes[8] = c0;
+  setAlwaysVectorizeSizes(convOp, vecTileSizes);
+
+  // Distribute over N, OC/k0, and OH. N is limited to unit tiles: batch
+  // tile sizes are constrained by the generated temporary buffer sizes,
+  // and larger batch tiles can lead to stack allocation errors.
+  DistributionHeuristicConfig distConfig;
+  distConfig.maxTileSizes.assign(9, 0);
+  distConfig.maxTileSizes[0] = 1;
+  distConfig.maxTileSizes[1] = clDefaultDistTileSize / 2;
+  distConfig.maxTileSizes[2] = clDefaultDistTileSize / 2;
+  SmallVector<int64_t> distTileSizes =
+      getDefaultDistributedLevelTileSizes(convOp, distConfig);
+
+  LDBG() << "Data tiled convolution:";
+  LDBG() << "  Dist tile sizes: " << distTileSizes;
+  LDBG() << "  Vector tile sizes: " << vecTileSizes;
+
+  LoweringConfigGenerator generator(convOp);
+  generator.setDistributionTileSizes(distTileSizes);
+  generator.setVectorTileSizes(vecTileSizes);
+  IREE::CPU::LoweringConfigAttr loweringConfig =
+      generator.generateCPULoweringConfig();
+
+  // When the conv ukernel is enabled we route through `Mmt4dTilingExpert`
+  // rather than a dedicated conv pipeline, because it already runs the modern
+  // lowerings a data-tiled conv dispatch needs: it invokes
+  // `CPULowerToUKernelsPass`, which matches the data-tiled conv
+  // `linalg.generic` and rewrites it to `iree_codegen.ukernel.generic` op,
+  // alongside tile-and-fuse and the generic vectorization passes.
+  // TODO: factor out a data-tiled pipeline that can be shared
+  // between mmt4d/inner_tiled/conv.
+  if (useUkernel) {
+    return setOpConfigAndEntryPointFnTranslation(
+        entryPointFn, convOp, loweringConfig,
+        getCPUTranslationInfo(convOp.getContext(),
+                              CPUPipeline::Mmt4dTilingExpert));
+  }
+
+  // Enable loop peeling so the OW tile yields a static-shaped main loop that
+  // vectorizes cleanly, leaving the remainder to a scalar epilogue.
+  DictionaryAttr pipelineConfig =
+      getPipelineConfWithPeelingAttr(convOp.getContext());
+  return setOpConfigAndEntryPointFnTranslation(
+      entryPointFn, convOp, loweringConfig,
+      getCPUTranslationInfo(convOp.getContext(),
+                            CPUPipeline::DoubleTilingExpert, pipelineConfig));
+}
+
 /// Redirects to methods that set the configuration based on operation type.
 static LogicalResult
 setRootConfigImpl(mlir::FunctionOpInterface entryPointFn, Operation *op,
@@ -3147,6 +3254,10 @@ setRootConfigImpl(mlir::FunctionOpInterface entryPointFn, Operation *op,
         is2DPoolingOp(linalgOp)) {
       return setConvInterfaceRootConfig(entryPointFn, linalgOp);
     }
+    if (IREE::Codegen::isDataTiledConvGeneric(op)) {
+      return setConvDataTiledGenericRootConfig(entryPointFn,
+                                               cast<linalg::GenericOp>(op));
+    }
     if (linalg::isaContractionOpInterface(linalgOp) &&
         meetLegacyContractionOpInterface(linalgOp)) {
       return setContractionRootConfig(entryPointFn, linalgOp);
@@ -3160,6 +3271,25 @@ setRootConfigImpl(mlir::FunctionOpInterface entryPointFn, Operation *op,
     return setRootConfig(entryPointFn, tilingInterface);
   }
   return failure();
+}
+
+/// Returns the `InnerTileAlignment` implied by a loop tile size relative to a
+/// pack/unpack inner tile size.
+static mlir::InnerTileAlignment getInnerTileAlignment(int64_t loopTile,
+                                                      bool loopScalable,
+                                                      int64_t innerTile,
+                                                      bool innerScalable) {
+  if (innerTile <= 0 || loopTile <= 0) {
+    return mlir::InnerTileAlignment::Unknown;
+  }
+  if (loopScalable) {
+    if (innerScalable && loopTile == innerTile) {
+      return mlir::InnerTileAlignment::Equal;
+    }
+    return loopTile % innerTile == 0 ? mlir::InnerTileAlignment::Multiple
+                                     : mlir::InnerTileAlignment::Unknown;
+  }
+  return mlir::InnerTileAlignment::Unknown;
 }
 
 /// Transforms tiling sizes from the unpacked domain to the packed domain
@@ -3497,6 +3627,8 @@ void MultiLoweringConfigGenerator::getVecTileSizesForNonRootOps(
 void MultiLoweringConfigGenerator::adjustTileSizesForRootOp() {
   ArrayRef<int64_t> rootOpGlobalDims =
       dimTracker.getAllGlobalDimIdx(rootOperation);
+  int64_t vscaleMax =
+      getVscaleMax(IREE::HAL::ExecutableTargetAttr::lookup(rootOperation));
   auto adjust = [&](Operation *op, ArrayRef<int64_t> vecTileSize,
                     IREE::CPU::TilingLevel level,
                     llvm::function_ref<int64_t(int64_t, int64_t)> updater) {
@@ -3535,11 +3667,22 @@ void MultiLoweringConfigGenerator::adjustTileSizesForRootOp() {
         continue;
       }
       // For pack op, align the distribution tile size and overwrite the
-      // vector parallel tile size and scalable flag.
-      adjust(op, vecTileSize, IREE::CPU::TilingLevel::DistributionTiles, align);
+      // vector parallel tile size and scalable flag. Distribution tiles for
+      // scalable inner tiles are aligned to their largest runtime size (base *
+      // vscaleMax).
+      SmallVector<bool> packScalableFlags = nonRootOpScalableFlags.lookup(op);
+      SmallVector<int64_t> distAlignTiles(vecTileSize.begin(),
+                                          vecTileSize.end());
+      for (auto [i, scalable] : llvm::enumerate(packScalableFlags)) {
+        if (scalable && i < distAlignTiles.size() && distAlignTiles[i] > 0) {
+          distAlignTiles[i] *= vscaleMax;
+        }
+      }
+      adjust(op, distAlignTiles, IREE::CPU::TilingLevel::DistributionTiles,
+             align);
       adjust(op, vecTileSize, IREE::CPU::TilingLevel::VectorCommonParallelTiles,
              overwrite);
-      adjustScalableFlags(op, nonRootOpScalableFlags.lookup(op),
+      adjustScalableFlags(op, packScalableFlags,
                           IREE::CPU::TilingLevel::VectorCommonParallelTiles,
                           overwrite);
     } else if (auto unpackOp = dyn_cast<linalg::UnPackOp>(op)) {
@@ -3700,6 +3843,53 @@ void MultiLoweringConfigGenerator::splitCommonInnerVectorTiles() {
   }
 }
 
+/// Captures the inner-tile alignment of a scalable `linalg.pack/unpack` at
+/// tiling `level` from its (unpacked-domain) loop tile sizes.
+template <typename PackUnpackType>
+static void captureInnerTileAlignment(
+    PackUnpackType op, const SizesAndScalableFlags &scalableTilesFlags,
+    IREE::CPU::TilingLevel level, ArrayRef<int64_t> tileSizes,
+    ArrayRef<bool> scalableFlags,
+    SmallVectorImpl<std::pair<IREE::CPU::TilingLevel, SmallVector<int64_t>>>
+        &perLevel) {
+  static_assert(
+      std::is_same_v<PackUnpackType, linalg::PackOp> ||
+          std::is_same_v<PackUnpackType, linalg::UnPackOp>,
+      "Inner tile alignment hints can only be captured for pack/unpack ops!");
+  // TODO(egebeysel): wire in distribution tile size alignment logic.
+  if (level == IREE::CPU::TilingLevel::DistributionTiles) {
+    return;
+  }
+  int64_t rank = std::is_same_v<PackUnpackType, linalg::PackOp>
+                     ? op.getSourceRank()
+                     : op.getDestRank();
+  SmallVector<int64_t> alignments(
+      rank, llvm::to_underlying(mlir::InnerTileAlignment::Unknown));
+  bool any = false;
+  for (auto [i, pos] : llvm::enumerate(op.getInnerDimsPos())) {
+    if (pos >= tileSizes.size() || pos >= scalableFlags.size()) {
+      continue;
+    }
+    bool innerScalable = scalableTilesFlags.second[i];
+    bool loopScalable = scalableFlags[pos];
+    // Two static sizes are related by static shape inference downstream, which
+    // needs no hint.
+    if (!innerScalable && !loopScalable) {
+      continue;
+    }
+    mlir::InnerTileAlignment kind =
+        getInnerTileAlignment(tileSizes[pos], loopScalable,
+                              scalableTilesFlags.first[i], innerScalable);
+    alignments[pos] = llvm::to_underlying(kind);
+    if (kind != mlir::InnerTileAlignment::Unknown) {
+      any = true;
+    }
+  }
+  if (any) {
+    perLevel.emplace_back(level, std::move(alignments));
+  }
+}
+
 void MultiLoweringConfigGenerator::setNewTilingConfigs() {
   SmallVector<IREE::CPU::TilingLevel> tilingLevels;
   tilingLevels.reserve(globalTileSizes.size());
@@ -3713,6 +3903,8 @@ void MultiLoweringConfigGenerator::setNewTilingConfigs() {
         cast<TilingInterface>(op).getLoopIteratorTypes();
     int numLoops = iterTypes.size();
     SmallVector<IREE::CPU::LoweringConfigLevelInfo> newTilingInfo;
+    SmallVector<std::pair<IREE::CPU::TilingLevel, SmallVector<int64_t>>>
+        perLevelAlignments;
     // Collect new tiling info.
     for (IREE::CPU::TilingLevel level : tilingLevels) {
       SmallVector<int64_t> tileSizes(numLoops, 0);
@@ -3741,25 +3933,41 @@ void MultiLoweringConfigGenerator::setNewTilingConfigs() {
       }
 
       if (auto packOp = dyn_cast<linalg::PackOp>(op)) {
+        // Capture this level's inner tile alignment for the pack's scalable
+        // inner tiles from the loop tile sizes while they are still in the
+        // unpacked domain.
+        if (auto packScalableTilesFlags =
+                getScalableTileSizesAndFlags(packOp.getMixedTiles())) {
+          captureInnerTileAlignment<linalg::PackOp>(
+              packOp, *packScalableTilesFlags, level, tileSizes, scalableFlags,
+              perLevelAlignments);
+        }
         // `MultiLoweringConfigGenerator` propagates tiling on the
         // unpacked dimensions, while for a pack operation, `LoweringConfig`
         // defines tiling on the packed inner dimensions. Therefore, use
         // `undoScaleAndPermutateTilingForPackOp` to translate the tiling
         // information from the unpacked to the packed dimensions.
         undoScaleAndPermutateTilingForPackOp(packOp, tileSizes, scalableFlags);
-      } else if (auto unpackOp = dyn_cast<linalg::UnPackOp>(op);
-                 unpackOp &&
-                 level == IREE::CPU::TilingLevel::VectorCommonParallelTiles &&
-                 unpackOp.getSource().getDefiningOp<linalg::LinalgOp>()) {
-        // The `IterationDimTracker` ties an unpack's destination loops only to
-        // the *outer* dims of its packed source operand, so `tileSizes`
-        // holds the source's outer tiling for consumer unpack operations. Map
-        // these onto the destination unpacked domain by scaling and permuting
-        // with the inner tile sizes.
-        undoScaleAndPermutateTilingForUnpackOp(unpackOp, tileSizes,
-                                               scalableFlags);
+      } else if (auto unpackOp = dyn_cast<linalg::UnPackOp>(op)) {
+        if (level == IREE::CPU::TilingLevel::VectorCommonParallelTiles &&
+            unpackOp.getSource().getDefiningOp<linalg::LinalgOp>()) {
+          // The `IterationDimTracker` ties an unpack's destination loops only
+          // to the *outer* dims of its packed source operand, so `tileSizes`
+          // holds the source's outer tiling for consumer unpack operations. Map
+          // these onto the destination unpacked domain by scaling and permuting
+          // with the inner tile sizes.
+          undoScaleAndPermutateTilingForUnpackOp(unpackOp, tileSizes,
+                                                 scalableFlags);
+        }
+        // Capture this level's alignment for the unpack's scalable inner tiles
+        // after converting them to the unpacked domain.
+        if (auto unpackScalableTilesFlags =
+                getScalableTileSizesAndFlags(unpackOp.getMixedTiles())) {
+          captureInnerTileAlignment<linalg::UnPackOp>(
+              unpackOp, *unpackScalableTilesFlags, level, tileSizes,
+              scalableFlags, perLevelAlignments);
+        }
       }
-
       // Append tiling info.
       newTilingInfo.push_back(
           {level, std::move(tileSizes), std::move(scalableFlags)});
@@ -3768,6 +3976,9 @@ void MultiLoweringConfigGenerator::setNewTilingConfigs() {
         getNewLoweringConfig(rootOperation->getContext(), newTilingInfo,
                              /*setDistributionConfig=*/op == rootOperation);
     setLoweringConfig(op, config);
+    if (!perLevelAlignments.empty()) {
+      IREE::CPU::InnerTileAlignmentsAttr::setOnOp(op, perLevelAlignments);
+    }
   }
 }
 
@@ -3890,10 +4101,11 @@ adjustTileSizesForRootUnPackOp(mlir::FunctionOpInterface entryPointFn,
   LDBG() << "The tile sizes for each dimension should be aligned to "
          << alignedSizes;
 
-  // Fixup for making tileSizes be multiple of inner_tile_sizes. In case of
-  // scalable inner tiles, we align the distribution tile sizes with the static
-  // constant of the scalable inner tile size and round up to the next power of
-  // 2 to ensure alignment.
+  // Fixup for making tileSizes be multiple of inner_tile_sizes. Scalable
+  // distribution tiles are aligned to the largest possible inner tile
+  // (base * vscaleMax).
+  int64_t vscaleMax =
+      getVscaleMax(IREE::HAL::ExecutableTargetAttr::lookup(entryPointFn));
   SmallVector<IREE::CPU::LoweringConfigLevelInfo> tilingInfo =
       loweringConfig.getAvailableTilingInfo();
   for (IREE::CPU::LoweringConfigLevelInfo &info : tilingInfo) {
@@ -3902,12 +4114,12 @@ adjustTileSizesForRootUnPackOp(mlir::FunctionOpInterface entryPointFn,
       if (tileSizes[idx] == 0) {
         continue;
       }
-      int64_t alignedTileSize =
-          llvm::alignTo(tileSizes[idx], alignedSizes[idx]);
-      tileSizes[idx] = roundUpToPow2(
-          alignedTileSize,
-          vecParallelScalableTileFlags[idx] &&
-              info.level == IREE::CPU::TilingLevel::DistributionTiles);
+      int multiplier = (vecParallelScalableTileFlags[idx] &&
+                        info.level == IREE::CPU::TilingLevel::DistributionTiles)
+                           ? vscaleMax
+                           : 1;
+      tileSizes[idx] =
+          llvm::alignTo(tileSizes[idx], alignedSizes[idx] * multiplier);
     }
     // Fixup for the scalable tile flags.
     if (info.level == IREE::CPU::TilingLevel::VectorCommonParallelTiles) {
@@ -4036,6 +4248,53 @@ lowerUsingDefaultPipeline(mlir::FunctionOpInterface entryPointFn) {
   return setTranslationInfo(entryPointFn, translationInfo);
 }
 
+/// For a `linalg.pack` whose producer is a `linalg.unpack`, no lowering config
+/// is assigned (see `shouldSetLoweringConfig`), so we cannot derive alignment
+/// hints from that. The pack shares its (unpacked) iteration domain with the
+/// producer unpack, which does carry a config, so for each tiling level present
+/// on the unpack we compare that level's tile sizes against the pack's scalable
+/// inner tiles and infer the inner tile alignment hints.
+static void annotateScalablePackConsumerOfUnpack(linalg::PackOp packOp) {
+  auto unpackOp = packOp.getSource().getDefiningOp<linalg::UnPackOp>();
+  if (!unpackOp) {
+    return;
+  }
+  auto unpackConfig =
+      getLoweringConfig<IREE::CPU::LoweringConfigAttr>(unpackOp);
+  if (!unpackConfig) {
+    return;
+  }
+  std::optional<SizesAndScalableFlags> packScalableTilesFlags =
+      getScalableTileSizesAndFlags(packOp.getMixedTiles());
+  if (!packScalableTilesFlags) {
+    return;
+  }
+
+  SmallVector<std::pair<IREE::CPU::TilingLevel, SmallVector<int64_t>>> perLevel;
+  for (int levelIdx = 0;
+       levelIdx < llvm::to_underlying(IREE::CPU::TilingLevel::MaxNumTileLevels);
+       ++levelIdx) {
+    auto level = static_cast<IREE::CPU::TilingLevel>(levelIdx);
+    // TODO(egebeysel): distribution tile sizes are only set on the root
+    // operation. They need special logic here.
+    if (!unpackConfig.hasTilingLevel(llvm::to_underlying(level))) {
+      continue;
+    }
+    auto levelAttr = dyn_cast<IREE::Codegen::LoweringConfigTilingLevelAttr>(
+        unpackConfig.getTilingLevelAttr(llvm::to_underlying(level)));
+    if (!levelAttr) {
+      continue;
+    }
+    captureInnerTileAlignment<linalg::PackOp>(
+        packOp, *packScalableTilesFlags, level, levelAttr.getSizes(),
+        levelAttr.getScalableFlags(), perLevel);
+  }
+
+  if (!perLevel.empty()) {
+    IREE::CPU::InnerTileAlignmentsAttr::setOnOp(packOp, perLevel);
+  }
+}
+
 /// Returns true if the given operation should have a lowering config set.
 ///
 /// This predicate excludes:
@@ -4123,6 +4382,16 @@ setTranslationInfoAndRootConfig(mlir::FunctionOpInterface entryPointFn,
     if (failed(setLoweringConfigForComputeOps(entryPointFn, prunedComputeOps,
                                               rootOperation))) {
       return failure();
+    }
+
+    // Packs fed by an unpack are pruned above and never receive a lowering
+    // config, yet they are still tiled as fused consumers downstream.
+    // Precompute the alignment of their scalable inner tiles relative to the
+    // producer unpack's per-level tile sizes.
+    for (Operation *op : computeOps) {
+      if (auto packOp = dyn_cast<linalg::PackOp>(op)) {
+        annotateScalablePackConsumerOfUnpack(packOp);
+      }
     }
   }
 

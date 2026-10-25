@@ -6,6 +6,7 @@
 
 #include "ROCMTargetUtils.h"
 
+#include <cstddef>
 #include <cstdint>
 
 #include "compiler/plugins/target/ROCM/Dialect/ROCM/IR/ROCMAttrs.h"
@@ -51,9 +52,10 @@
 #include "llvm/Support/FormatVariadic.h"
 #include "llvm/Support/TargetSelect.h"
 #include "llvm/Target/TargetMachine.h"
+#include "llvm/TargetParser/AMDGPUTargetParser.h"
 #include "llvm/Transforms/Utils/Cloning.h"
-#include "mlir/Dialect/AMDGPU/Utils/Chipset.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
+#include "mlir/Dialect/LLVMIR/ROCDLTargetInfo.h"
 #include "mlir/IR/Attributes.h"
 #include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/Pass/PassManager.h"
@@ -165,9 +167,16 @@ static void appendAMDGPUTargetFeatureSuffix(std::string &targetID,
   }
 }
 
-static FailureOr<std::string> buildAMDGPUTargetID(Location loc,
-                                                  StringRef targetArch,
-                                                  StringRef targetFeatures) {
+static llvm::Triple getAMDGPUTargetTriple(StringRef targetArch) {
+  llvm::Triple triple("amdgcn-amd-amdhsa");
+  triple.setArch(llvm::Triple::amdgpu,
+                 llvm::AMDGPU::getSubArchFromGPUName(targetArch));
+  return triple;
+}
+
+static FailureOr<llvm::AMDGPU::TargetID>
+parseAMDGPUTargetID(Location loc, StringRef targetArch,
+                    StringRef targetFeatures) {
   FailureOr<AMDGPUTargetFeatureModes> modes =
       parseAMDGPUTargetFeatureModes(loc, targetFeatures);
   if (failed(modes)) {
@@ -176,7 +185,12 @@ static FailureOr<std::string> buildAMDGPUTargetID(Location loc,
   std::string targetID = targetArch.str();
   appendAMDGPUTargetFeatureSuffix(targetID, "sramecc", modes->sramecc);
   appendAMDGPUTargetFeatureSuffix(targetID, "xnack", modes->xnack);
-  return targetID;
+  auto parsedTargetID = llvm::AMDGPU::TargetID::parse(
+      getAMDGPUTargetTriple(targetArch), targetID);
+  if (!parsedTargetID) {
+    return emitError(loc) << "invalid ROCM target ID '" << targetID << "'";
+  }
+  return *parsedTargetID;
 }
 
 struct ROCMOptions {
@@ -310,8 +324,9 @@ struct ROCMOptions {
       return emitError(builder.getUnknownLoc(), "Unknown ROCM target '")
              << target << "'";
     }
-    if (failed(parseAMDGPUTargetFeatureModes(builder.getUnknownLoc(),
-                                             targetFeatures))) {
+    if (failed(parseAMDGPUTargetID(builder.getUnknownLoc(),
+                                   GPU::normalizeHIPTarget(target),
+                                   targetFeatures))) {
       return failure();
     }
     return success();
@@ -425,13 +440,13 @@ public:
     if (targetOptions.useAmdgcnSpirv) {
       format = "rocm-spirv-fb";
     } else if (deviceID == "amdgpu") {
-      FailureOr<std::string> targetID =
-          buildAMDGPUTargetID(b.getUnknownLoc(), targetOptions.target,
-                              targetOptions.targetFeatures);
+      auto targetID = parseAMDGPUTargetID(
+          b.getUnknownLoc(), GPU::normalizeHIPTarget(targetOptions.target),
+          targetOptions.targetFeatures);
       if (failed(targetID)) {
         return nullptr;
       }
-      format = *targetID;
+      format = targetID->getCanonicalFeatureString();
     } else {
       format = "rocm-hsaco-fb"; // legacy HIP
     }
@@ -701,9 +716,17 @@ public:
     }
     StringRef targetArch = targetOptions.target;
     StringRef targetFeatures = targetOptions.targetFeatures;
+    uint32_t preferredSubgroupSize = 64;
     if (auto attr = getGPUTargetAttr(variantOp.getContext(), targetAttr)) {
       targetArch = attr.getArch();
       targetFeatures = attr.getFeatures();
+      preferredSubgroupSize = attr.getPreferredSubgroupSize();
+    }
+
+    auto targetID =
+        parseAMDGPUTargetID(variantOp.getLoc(), targetArch, targetFeatures);
+    if (failed(targetID)) {
+      return failure();
     }
 
     // We name our files after the executable name so that they are easy to
@@ -762,12 +785,12 @@ public:
                << "object file could not be loaded: " << objectAttr;
       }
     } else {
-      auto maybeChipset = amdgpu::Chipset::parse(targetArch);
-      if (failed(maybeChipset)) {
-        return variantOp.emitOpError()
-               << "could not parse AMDGPU chipset name '" << targetArch << "'";
+      FailureOr<ROCDL::TargetInfo> maybeTargetInfo = ROCDL::TargetInfo::get(
+          targetArch, /*waveSize=*/0, [&] { return variantOp.emitOpError(); });
+      if (failed(maybeTargetInfo)) {
+        return failure();
       }
-      amdgpu::Chipset chipset = *maybeChipset;
+      ROCDL::TargetInfo targetInfo = *maybeTargetInfo;
       // Perform the translation in a separate context to avoid any
       // multi-threading issues.
       llvm::LLVMContext context;
@@ -803,7 +826,7 @@ public:
       std::unique_ptr<llvm::TargetMachine> targetMachine;
       bool isWave64 = true;
       {
-        llvm::Triple triple("amdgcn-amd-amdhsa");
+        llvm::Triple triple = getAMDGPUTargetTriple(targetArch);
         std::string error;
         const llvm::Target *target =
             llvm::TargetRegistry::lookupTarget("", triple, error);
@@ -811,7 +834,6 @@ public:
           return variantOp.emitError() << "cannot initialize target triple";
         }
         llvm::TargetOptions opt;
-        opt.AllowFPOpFusion = llvm::FPOpFusion::Fast;
         // Be extra cautious while this is less tested, and prevent unknown
         // fallbacks from global isel.
         //
@@ -827,8 +849,8 @@ public:
                                   ? llvm::GlobalISelAbortMode::Enable
                                   : llvm::GlobalISelAbortMode::Disable;
         SmallVector<std::string> features;
-        if (chipset.majorVersion >= 10 && chipset.majorVersion <= 12) {
-          switch (subgroupSize.value_or(64)) {
+        if (targetInfo.supportsBothWavefrontSizes()) {
+          switch (subgroupSize.value_or(preferredSubgroupSize)) {
           case 32:
             isWave64 = false;
             features.emplace_back("+wavefrontsize32");
@@ -838,6 +860,8 @@ public:
             features.emplace_back("+wavefrontsize64");
             break;
           }
+        } else {
+          isWave64 = targetInfo.getWavefrontSize().value_or(64) == 64;
         }
 
         // Mixed precision fma instructions have complicated semantics on
@@ -846,10 +870,6 @@ public:
         // feature.
         if (targetArch.starts_with("gfx9")) {
           features.emplace_back("-fma-mix-insts");
-        }
-
-        if (!targetFeatures.empty()) {
-          features.emplace_back(targetFeatures.str());
         }
 
         std::string featureStr = llvm::join(features, ",");
@@ -881,6 +901,21 @@ public:
         // that our CI or users may not be prepared for.
         llvmModule->addModuleFlag(llvm::Module::Error,
                                   "amdhsa_code_object_version", abiVersion);
+
+        // XNACK and SRAM ECC describe the whole code object. LLVM requires
+        // module flags for explicit settings, not subtarget features. Leave
+        // unspecified/unsupported settings absent to preserve their defaults.
+        auto addTargetIDFlag = [&](StringRef name,
+                                   llvm::AMDGPU::TargetIDSetting setting) {
+          using llvm::AMDGPU::TargetIDSetting;
+          if (setting == TargetIDSetting::On ||
+              setting == TargetIDSetting::Off) {
+            llvmModule->addModuleFlag(llvm::Module::Error, name,
+                                      setting == TargetIDSetting::On);
+          }
+        };
+        addTargetIDFlag("amdgpu.xnack", targetID->getXnackSetting());
+        addTargetIDFlag("amdgpu.sramecc", targetID->getSramEccSetting());
 
         // Set the buffer OOB mode to "relaxed", since IREE does its own, more
         // precise, mitigations for partially OOB buffer reads of underalligned
@@ -936,8 +971,8 @@ public:
         }
 
         // Sets HIP platform globals based on the target architecture.
-        if (failed(setHIPGlobals(variantOp.getLoc(), llvmModule.get(), chipset,
-                                 isWave64, abiVersion))) {
+        if (failed(setHIPGlobals(variantOp.getLoc(), llvmModule.get(),
+                                 targetInfo, isWave64, abiVersion))) {
           return failure();
         }
       }
@@ -951,7 +986,7 @@ public:
       // For example 'gfx942'.
       StringRef targetCPU = targetMachine->getTargetCPU();
 
-      // For example 'amdgcn-amd-amdhsa'.
+      // For example 'amdgpu9.42-amd-amdhsa'.
       std::string targetTriple = targetMachine->getTargetTriple().str();
 
       // Run LLVM optimization passes.
@@ -1129,14 +1164,12 @@ public:
       break;
     }
     case ContainerType::AMDGPU: {
-      FailureOr<std::string> targetID =
-          buildAMDGPUTargetID(variantOp.getLoc(), targetArch, targetFeatures);
-      if (failed(targetID)) {
-        return failure();
-      }
-      executableBinaryFormat = executableBuilder.getStringAttr(*targetID);
+      std::string canonicalTargetID = targetID->getCanonicalFeatureString();
+      executableBinaryFormat =
+          executableBuilder.getStringAttr(canonicalTargetID);
       binaryContainer = serializeAMDGPUBinaryContainer(
-          serializationOptions, variantOp, exportOps, *targetID, targetHSACO);
+          serializationOptions, variantOp, exportOps, canonicalTargetID,
+          targetHSACO);
       break;
     }
     case ContainerType::HIP: {

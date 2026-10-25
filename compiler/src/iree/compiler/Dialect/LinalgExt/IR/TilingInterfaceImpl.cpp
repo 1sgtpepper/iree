@@ -16,11 +16,13 @@
 #include "mlir/Dialect/Math/IR/Math.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
+#include "mlir/Dialect/SCF/Utils/AffineCanonicalizationUtils.h"
 #include "mlir/Dialect/Tensor/IR/Tensor.h"
 #include "mlir/Dialect/Utils/IndexingUtils.h"
 #include "mlir/Dialect/Utils/StaticValueUtils.h"
 #include "mlir/IR/IRMapping.h"
 #include "mlir/IR/OpDefinition.h"
+#include "mlir/Interfaces/ValueBoundsOpInterface.h"
 
 #define DEBUG_TYPE "linalg-ext-tiling"
 
@@ -853,6 +855,82 @@ LogicalResult MapStoreOp::generateScalarImplementation(OpBuilder &b,
 // SortOp
 //===----------------------------------------------------------------------===//
 
+// A sort cannot be partitioned along its sorting dimension, including when
+// buffer semantics provide no SSA results for result-position validation.
+static bool isFullSortTile(SortOp sortOp, ArrayRef<OpFoldResult> offsets,
+                           ArrayRef<OpFoldResult> sizes) {
+  int64_t dimension = sortOp.getDimension();
+  using Bounds = ValueBoundsConstraintSet;
+  // An explicit dynamic full-axis tile generates a loop from zero to the
+  // dimension size with a step at least that large. Its IV is zero, but the
+  // generic bounds model cannot represent the resulting nonlinear trip count.
+  auto boundFullTileLoop = [](Value value, std::optional<int64_t> dim,
+                              Bounds &bounds) {
+    if (dim) {
+      return false;
+    }
+    // matchForLikeLoop also matches scf.for iter_args via their owner.
+    if (auto loop = scf::getForInductionVarOwner(value);
+        loop && value != loop.getInductionVar()) {
+      return false;
+    }
+    OpFoldResult lower, upper, step;
+    if (failed(scf::matchForLikeLoop(value, lower, upper, step)) ||
+        !isZeroInteger(lower) ||
+        !Bounds::compare(Bounds::Variable(upper), Bounds::LE,
+                         Bounds::Variable(step))) {
+      return false;
+    }
+    bounds.bound(value) == 0;
+    return true;
+  };
+  auto offset = Bounds::computeConstantBound(
+      presburger::BoundType::EQ, Bounds::Variable(offsets[dimension]),
+      boundFullTileLoop);
+  if (failed(offset) || *offset != 0) {
+    return false;
+  }
+  AffineExpr tileSize, fullSize;
+  bindDims(sortOp.getContext(), tileSize, fullSize);
+  auto getSizeDifference = [&](const Bounds::Variable &size,
+                               presburger::BoundType boundType) {
+    Bounds::Variable difference(
+        AffineMap::get(2, 0, tileSize - fullSize),
+        {size, Bounds::Variable(sortOp.getOperand(0), dimension)});
+    return Bounds::computeConstantBound(boundType, difference,
+                                        boundFullTileLoop);
+  };
+  auto sizeDifference = getSizeDifference(Bounds::Variable(sizes[dimension]),
+                                          presburger::BoundType::EQ);
+  if (succeeded(sizeDifference) && *sizeDifference == 0) {
+    return true;
+  }
+  // The bounds model gives affine.min only upper bounds. A minimum whose
+  // candidates are all at least the full dimension and include that exact
+  // dimension also covers the full axis.
+  auto sizeValue = dyn_cast<Value>(sizes[dimension]);
+  auto minOp = sizeValue ? sizeValue.getDefiningOp<affine::AffineMinOp>()
+                         : affine::AffineMinOp();
+  if (!minOp) {
+    return false;
+  }
+  bool hasFullSize = false;
+  for (unsigned i : llvm::seq<unsigned>(0, minOp.getMap().getNumResults())) {
+    Bounds::Variable candidate(minOp.getMap().getSubMap({i}),
+                               minOp.getOperands());
+    auto difference = getSizeDifference(candidate, presburger::BoundType::EQ);
+    if (succeeded(difference) && *difference == 0) {
+      hasFullSize = true;
+      continue;
+    }
+    auto lowerBound = getSizeDifference(candidate, presburger::BoundType::LB);
+    if (failed(lowerBound) || *lowerBound < 0) {
+      return false;
+    }
+  }
+  return hasFullSize;
+}
+
 SmallVector<utils::IteratorType> SortOp::getLoopIteratorTypes() {
   // All loops except the dimension to sort along are parallel.
   SmallVector<utils::IteratorType> iteratorTypes(getOperandRank(),
@@ -867,7 +945,7 @@ SmallVector<Range> SortOp::getIterationDomain(OpBuilder &builder) {
   Location loc = getLoc();
   OpFoldResult zero = builder.getIndexAttr(0);
   OpFoldResult one = builder.getIndexAttr(1);
-  Value source = getOperand(0);
+  Value source = getInputs()[0];
   for (auto dim : llvm::seq<int64_t>(0, operandRank)) {
     loopBounds[dim].offset = zero;
     loopBounds[dim].size = getDim(builder, loc, source, dim);
@@ -883,19 +961,36 @@ SortOp::getTiledImplementation(OpBuilder &builder,
   int64_t rank = getOperandRank();
   assert(offsets.size() == static_cast<size_t>(rank) &&
          sizes.size() == static_cast<size_t>(rank));
+  // Buffer tiling retains the original operands. Tensor tiling may instead
+  // receive iter_args of an unfinished loop; validate it on the original op
+  // in getResultTilePosition.
+  if (hasPureBufferSemantics() && !isFullSortTile(*this, offsets, sizes)) {
+    return failure();
+  }
   auto oneAttr = builder.getI64IntegerAttr(1);
   SmallVector<OpFoldResult> strides(rank, oneAttr);
   SmallVector<Operation *> slices;
-  SmallVector<Value> tiledOperands(getOutputs().size());
+  SmallVector<Value> tiledInputs(getInputs().size());
+  SmallVector<Value> tiledOutputs(getOutputs().size());
+  SmallVector<Value> tiledOperands;
+  tiledOperands.reserve(getInputs().size() + getOutputs().size());
+  for (auto [idx, input] : llvm::enumerate(getInputs())) {
+    Operation *slice =
+        getSlice(builder, getLoc(), input, offsets, sizes, strides);
+    tiledInputs[idx] = slice->getResult(0);
+    tiledOperands.push_back(tiledInputs[idx]);
+    slices.push_back(slice);
+  }
   for (auto [idx, output] : llvm::enumerate(getOutputs())) {
     Operation *slice =
         getSlice(builder, getLoc(), output, offsets, sizes, strides);
-    tiledOperands[idx] = slice->getResult(0);
+    tiledOutputs[idx] = slice->getResult(0);
+    tiledOperands.push_back(tiledOutputs[idx]);
     slices.push_back(slice);
   }
   SmallVector<Type, 4> resultTypes;
   if (getNumResults()) {
-    resultTypes = llvm::map_to_vector<4>(tiledOperands,
+    resultTypes = llvm::map_to_vector<4>(tiledOutputs,
                                          [&](Value v) { return v.getType(); });
   }
   Operation *tiledSortOp =
@@ -908,6 +1003,9 @@ LogicalResult SortOp::getResultTilePosition(
     OpBuilder &builder, unsigned resultNumber, ArrayRef<OpFoldResult> offsets,
     ArrayRef<OpFoldResult> sizes, SmallVector<OpFoldResult> &resultOffsets,
     SmallVector<OpFoldResult> &resultSizes) {
+  if (!isFullSortTile(*this, offsets, sizes)) {
+    return failure();
+  }
   resultOffsets = llvm::to_vector(offsets);
   resultSizes = llvm::to_vector(sizes);
   return success();
@@ -978,14 +1076,32 @@ LogicalResult SortOp::generateScalarImplementation(OpBuilder &b, Location loc,
   auto sortDim = getDimension();
   Value zero = arith::ConstantIndexOp::create(b, loc, 0);
   Value one = arith::ConstantIndexOp::create(b, loc, 1);
-  Value ub;
+  Value sortDimSize;
   if (getOperandType(0).isDynamicDim(sortDim)) {
-    ub = memref::DimOp::create(b, loc, getOperand(0), sortDim);
+    sortDimSize = memref::DimOp::create(b, loc, getInputs()[0], sortDim);
   } else {
-    ub = arith::ConstantIndexOp::create(b, loc,
-                                        getOperandType(0).getDimSize(sortDim));
+    sortDimSize = arith::ConstantIndexOp::create(
+        b, loc, getOperandType(0).getDimSize(sortDim));
   }
-  ub = arith::SubIOp::create(b, loc, ub, one);
+  SmallVector<Value> indices(ivs);
+  Value firstSortPass = arith::CmpIOp::create(b, loc, arith::CmpIPredicate::eq,
+                                              indices[sortDim], zero);
+  scf::IfOp::create(b, loc, firstSortPass, [&](OpBuilder &b, Location loc) {
+    scf::ForOp::create(
+        b, loc, zero, sortDimSize, one, ValueRange{},
+        [&](OpBuilder &b, Location loc, Value iv, ValueRange iters) {
+          SmallVector<Value> indices(ivs);
+          indices[sortDim] = iv;
+          for (auto [input, output] :
+               llvm::zip_equal(getDpsInputs(), getDpsInits())) {
+            Value v = memref::LoadOp::create(b, loc, input, indices);
+            memref::StoreOp::create(b, loc, v, output, indices);
+          }
+          scf::YieldOp::create(b, loc);
+        });
+    scf::YieldOp::create(b, loc);
+  });
+  Value ub = arith::SubIOp::create(b, loc, sortDimSize, one);
   SmallVector<Value> compareOperands(getDpsInits().begin(),
                                      getDpsInits().end());
   emitBubbleSortSweep(b, loc, zero, one, ub, sortDim, ivs, compareOperands,

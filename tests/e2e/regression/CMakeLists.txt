@@ -14,11 +14,18 @@ iree_lit_test_suite(
   NAME
     lit
   SRCS
+    "argsort_comparator_lanes_dynamic.mlir"
+    "argsort_dynamic.mlir"
+    "argsort_internal_key_use.mlir"
+    "argsort_preserve_input_dynamic.mlir"
+    "argsort_views_dynamic.mlir"
     "fill_i64.mlir"
     "force_single_dispatch.mlir"
     "globals.mlir"
     "libm_linking.mlir"
     "scalar.mlir"
+    "sort_workspace_versions.mlir"
+    "stream_reference_counting_aliased_loop_results.mlir"
     "trace_dispatch_tensors.mlir"
     "transients_test.mlir"
     "unused_args.mlir"
@@ -265,3 +272,17 @@ iree_check_single_backend_test_suite(
 )
 
 ### BAZEL_TO_CMAKE_PRESERVES_ALL_CONTENT_BELOW_THIS_LINE ###
+
+if(IREE_HAL_DRIVER_HIP AND IREE_ROCM_TEST_TARGET_CHIP MATCHES "^gfx1250")
+  foreach(_TEST IN ITEMS
+    "iree/tests/e2e/regression/check_regression_hip_dynamic_batch_matmul_gfx1100.mlir"
+    "iree/tests/e2e/regression/check_regression_hip_dynamic_gather_attention.mlir"
+    "iree/tests/e2e/regression/check_regression_hip_linalg_ops_dynamic.mlir"
+    "iree/tests/e2e/regression/check_regression_hip_split_reduction_using_tiling.mlir"
+    "iree/tests/e2e/regression/check_regression_vector_distribute_64bit_hip_vector_distribute_64bit_amdgpu.mlir"
+  )
+    if(TEST "${_TEST}")
+      set_property(TEST "${_TEST}" APPEND PROPERTY LABELS "very-expensive")
+    endif()
+  endforeach()
+endif()

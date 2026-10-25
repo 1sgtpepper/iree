@@ -21,6 +21,19 @@ We'd love to accept your patches and contributions to this project.
 This project follows the
 [LF Projects code of conduct](https://lfprojects.org/policies/code-of-conduct/).
 
+### :octicons-organization-16: Project governance
+
+IREE is a sandbox-stage project of the
+[LF AI & Data Foundation](https://lfaidata.foundation/). Technical
+oversight of the project is the responsibility of its Technical
+Steering Committee (TSC), as set out in the
+[IREE Technical Charter](https://github.com/lfai/foundation/blob/main/technical%20project%20charters/IREE%20Technical%20Charter%20Final%205-14-2024.docx.pdf).
+The voting members of the TSC are listed in
+[CONTRIBUTING.md](https://github.com/iree-org/iree/blob/main/CONTRIBUTING.md);
+see
+[MAINTAINERS.md](https://github.com/iree-org/iree/blob/main/MAINTAINERS.md)
+for how the TSC operates. TSC meetings are open to everyone.
+
 ### :octicons-law-16: Developer Certificate of Origin
 
 Contributors must certify that they wrote or otherwise have the right to submit
@@ -139,14 +152,28 @@ track of those who have made significant contributions to the project.
   contributions.
 
 The
-[`.github/CODEOWNERS` file](https://github.com/iree-org/iree/blob/main/.github/CODEOWNERS)
-lets maintainers opt in to PR reviews modifying certain paths.
-
-* Review is not required from a code owner, though it is recommended.
+[`MAINTAINERS.md` file](https://github.com/iree-org/iree/blob/main/MAINTAINERS.md)
+documents the Technical Steering Committee (TSC) and official maintainers for
+project components.
 
 The
-[`MAINTAINERS.md` file](https://github.com/iree-org/iree/blob/main/MAINTAINERS.md)
-documents official maintainers for project components.
+[`.github/CODEOWNERS` file](https://github.com/iree-org/iree/blob/main/.github/CODEOWNERS)
+designates reviewers for specific components of the project. Maintainers of the
+project are assigned as reviewers by default, so that they serve as the first
+point of contact and help find a reviewer in case they can't perform the review
+themselves.
+
+A strong, recent history of quality commits to a certain part of the project is
+generally enough to nominate oneself as a CODEOWNER - subject to maintainer
+approval, such participation in the project would be very welcome.
+
+An approval on the PR generally doesn't have to come from a designated code
+owner. A single approval by a project member with write access is technically
+sufficient to merge the change, however authors of larger PRs that affect
+multiple components should allow more time for several code owners and other
+project members to review. In such cases, preceding the change with a RFC and
+aligning with code owners/maintainers on the design is also a recommended
+practice - this allows to minimize time spent in the final PR review stage.
 
 ## :octicons-code-16: Coding policies
 
@@ -283,7 +310,7 @@ Access to repositories is divided into tiers following the
 | ---- | ----------- | --------- |
 Triage | **New project members should typically start here**<br>:material-check: Can be [assigned issues](https://docs.github.com/en/issues/tracking-your-work-with-issues/assigning-issues-and-pull-requests-to-other-github-users)<br>:material-check: Can apply labels to issues / PRs<br>:material-check: Can run workflows [without approval](https://docs.github.com/en/actions/managing-workflow-runs/approving-workflow-runs-from-public-forks) | <ul><li>[iree-triage](https://github.com/orgs/iree-org/teams/iree-triage)<br>(access to most repositories)</li></ul>
 Write | **Established contributors can request this access**<br>:material-check: Can [merge approved pull requests](https://docs.github.com/en/pull-requests/collaborating-with-pull-requests/incorporating-changes-from-a-pull-request/merging-a-pull-request)<br>:material-check: Can create branches<br>:material-check: Can [re-run workflows](https://docs.github.com/en/actions/managing-workflow-runs-and-deployments/managing-workflow-runs/re-running-workflows-and-jobs) | <ul><li>[iree-write](https://github.com/orgs/iree-org/teams/iree-write)<br>(access to most repositories)</li><li>[iree-turbine-write](https://github.com/orgs/iree-org/teams/iree-turbine-write)<br>(access to <a href="https://github.com/iree-org/iree-turbine">iree-turbine</a>)</li><li>[iree-fusilli-write](https://github.com/orgs/iree-org/teams/iree-fusilli-write)<br>(access to <a href="https://github.com/iree-org/fusilli">fusilli</a>)</li></ul>
-Maintain/Admin | :material-check: Can [edit repository settings](https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features)<br>:material-check: Can push to [protected branches](https://docs.github.com/en/repositories/configuring-branches-and-merges-in-your-repository/managing-protected-branches/about-protected-branches) | Added case-by-case
+Maintain/Admin | :material-check: Can [edit repository settings](https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features)<br>:material-check: Can push to [protected branches](https://docs.github.com/en/repositories/configuring-branches-and-merges-in-your-repository/managing-protected-branches/about-protected-branches) | Added case-by-case by the TSC
 
 All access tiers first require joining the
 [iree-org GitHub organization](https://github.com/iree-org/). To request
@@ -489,7 +516,7 @@ runs.
 * Opt in to the MacOS build and test workflows:
 
     ``` text
-    ci-extra: macos_arm64_clang, macos_x64_clang
+    ci-extra: macos_arm64_clang
     ```
 
 * Other opt in builds:

@@ -64,12 +64,60 @@ namespace mlir::iree_compiler::IREE::CPU {
 
 using IREE::Codegen::MaterializeEncodingInfo;
 using IREE::Codegen::TileMxNxK;
+using IREE::Codegen::TileOCxIC;
 
 namespace {
 
 //===----------------------------------------------------------------------===//
 // Utilities.
 //===----------------------------------------------------------------------===//
+
+// RISC-V has vector register length extensions: zvl128b, zvl256b etc.
+// If these extension are specified in target cpu feature,
+// they can be used to determine VLEN. This function assumes that
+// 'v' feature is present
+static size_t getRISCVVVlenFromCPUFeatures(DictionaryAttr config) {
+  // If +zvl* feature is not explicitly specified,
+  // fallback to +zvl128b, as spec specifies minimum VLEN
+  // of 128b for the V extension: https://rb.gy/p8rbzv
+  size_t vlen;
+  if (hasFeature(config, "+zvl65536b")) {
+    vlen = 65536;
+  } else if (hasFeature(config, "+zvl32768b")) {
+    vlen = 32768;
+  } else if (hasFeature(config, "+zvl16384b")) {
+    vlen = 16384;
+  } else if (hasFeature(config, "+zvl8192b")) {
+    vlen = 8192;
+  } else if (hasFeature(config, "+zvl4096b")) {
+    vlen = 4096;
+  } else if (hasFeature(config, "+zvl2048b")) {
+    vlen = 2048;
+  } else if (hasFeature(config, "+zvl1024b")) {
+    vlen = 1024;
+  } else if (hasFeature(config, "+zvl512b")) {
+    vlen = 512;
+  } else if (hasFeature(config, "+zvl256b")) {
+    vlen = 256;
+  } else {
+    vlen = 128;
+  }
+  return vlen;
+}
+
+/// Returns the vector register length in bits to use for VLEN-parameterized
+/// ISAs, or 0 if the target has none. Also 0 under scalable vectorization,
+/// where the tile layout comes from scalable tile flags rather than a resolved
+/// VLEN.
+static int64_t getVlenBitsForConfig(DictionaryAttr config) {
+  if (!config || isScalableVectorizationEnabled()) {
+    return 0;
+  }
+  if (isRISCV64(config) && hasFeature(config, "+v")) {
+    return static_cast<int64_t>(getRISCVVVlenFromCPUFeatures(config));
+  }
+  return 0;
+}
 
 /// Determines which tile dimensions should be scalable for a given target.
 /// For AArch64 SVE/SVE2 and RISC-V with the V extension (when not using static
@@ -384,6 +432,19 @@ getMmaIntrinsicRequiredFeatures(IREE::CPU::MMAIntrinsic intr) {
   case MMAIntrinsic::MMA_X86_AVX512VNNI_16x1x4_I32_I8_UI8:
   case MMAIntrinsic::MMA_X86_AVX512VNNI_16x16x2_I32_I8_CASTI16:
     return {"+avx512vnni"};
+  case MMAIntrinsic::MMA_RISCV_V_VFMACC_1x8VLsx1_F32_F32:
+  case MMAIntrinsic::MMA_RISCV_V_VFMACC_8VLsx1x1_F32_F32:
+    return {"+v"};
+  case MMAIntrinsic::MMA_RISCV_V_VFMACC_1x8VLsx1_F16_F16:
+  case MMAIntrinsic::MMA_RISCV_V_VFMACC_8VLsx1x1_F16_F16:
+  case MMAIntrinsic::MMA_RISCV_V_VFWMACC_1x8VLsx1_F32_F16:
+  case MMAIntrinsic::MMA_RISCV_V_VFWMACC_8VLsx1x1_F32_F16:
+    return {"+v", "+zvfh"};
+  case MMAIntrinsic::MMA_RISCV_V_VFMACC_1x8VLsx1_F32_F16_CASTF32:
+  case MMAIntrinsic::MMA_RISCV_V_VFMACC_8VLsx1x1_F32_F16_CASTF32:
+  case MMAIntrinsic::MMA_RISCV_V_VFMACC_1x8VLsx1_F16_F16_WIDENF32:
+  case MMAIntrinsic::MMA_RISCV_V_VFMACC_8VLsx1x1_F16_F16_WIDENF32:
+    return {"+v", "+zvfhmin"};
   default:
     return {};
   }
@@ -429,10 +490,13 @@ pickGenericScalarMMAForTarget(DictionaryAttr config) {
 /// type-polymorphic, so it satisfies (4) vacuously. We skip the
 /// `DataTiledMMAAttr`-based extraction for it (passing null element types
 /// to the attr would invalidate the resulting vector types).
-static bool isMmaIntrinsicArrayValid(MLIRContext *ctx,
+static bool isMmaIntrinsicArrayValid(DictionaryAttr config,
                                      ArrayRef<IREE::CPU::MMAIntrinsic> arr) {
   using IREE::CPU::DataTiledMMAAttr;
   using IREE::CPU::MMAIntrinsic;
+
+  MLIRContext *ctx = config.getContext();
+  int64_t vlen = getVlenBitsForConfig(config);
 
   // Conventions (1) and (2): order, strict increase, swap-pair structure.
   if (!arr.empty() && (static_cast<uint32_t>(arr[0]) & 1) != 0) {
@@ -453,8 +517,8 @@ static bool isMmaIntrinsicArrayValid(MLIRContext *ctx,
   // `ui8` LHS visibly swaps with its sibling's `ui8` RHS. Read directly
   // from `getABCElementTypes`; `getUndistributedTileTypes` would strip it.
   auto getShapeAndTypes = [&](MMAIntrinsic intr) {
-    auto mnk = IREE::CPU::getRowMajorTilesMNKShape(intr);
-    assert(mnk && "validator only handles row-major-tile intrinsics");
+    auto mnk = IREE::CPU::getIntrinsicMNKShape(intr, vlen);
+    assert(mnk && "intrinsic does not declare an MNK shape");
     auto [m, n, k] = *mnk;
     auto [lhs, rhs, acc] = IREE::CPU::getABCElementTypes(ctx, intr);
     return std::make_tuple(m, n, k, lhs, rhs, acc);
@@ -501,6 +565,29 @@ static bool isMmaIntrinsicArrayValid(MLIRContext *ctx,
 /// when no real MMA covers the requested element types.
 ///
 /// There must be no early-return path that omits the trailing
+/// Appends the intrinsics from `candidates` whose required target features are
+/// all present in `config` to `out`.
+static void
+checkIntrinsicRequiredFeatures(DictionaryAttr config,
+                               ArrayRef<IREE::CPU::MMAIntrinsic> candidates,
+                               SmallVectorImpl<IREE::CPU::MMAIntrinsic> &out) {
+  for (IREE::CPU::MMAIntrinsic intr : candidates) {
+    SmallVector<StringRef> required = getMmaIntrinsicRequiredFeatures(intr);
+    if (required.empty()) {
+      continue;
+    }
+    if (llvm::all_of(required, [&](StringRef f) {
+          if (hasFeature(config, f)) {
+            return true;
+          }
+          // Zvfh includes Zvfhmin; IREE matches feature strings exactly.
+          return f == "+zvfhmin" && hasFeature(config, "+zvfh");
+        })) {
+      out.push_back(intr);
+    }
+  }
+}
+
 /// generic-scalar push — `out` is asserted to be non-empty / well-formed at
 /// the bottom and downstream callers rely on always seeing at least the
 /// generic fallback. Place the generic at the end (rather than the front)
@@ -541,19 +628,25 @@ getMmaIntrinsicsForTargetConfig(DictionaryAttr config) {
         MMAIntrinsic::MMA_X86_AVX512VNNI_16x1x4_I32_I8_UI8,
         MMAIntrinsic::MMA_X86_AVX512VNNI_16x16x2_I32_I8_CASTI16,
     };
-    for (MMAIntrinsic intr : kAllX86) {
-      SmallVector<StringRef> required = getMmaIntrinsicRequiredFeatures(intr);
-      if (required.empty()) {
-        continue;
-      }
-      if (llvm::all_of(required,
-                       [&](StringRef f) { return hasFeature(config, f); })) {
-        out.push_back(intr);
-      }
-    }
+    checkIntrinsicRequiredFeatures(config, kAllX86, out);
+  }
+  if (isRISCV64(config)) {
+    static const MMAIntrinsic kAllRiscvV[] = {
+        MMAIntrinsic::MMA_RISCV_V_VFMACC_1x8VLsx1_F32_F32,
+        MMAIntrinsic::MMA_RISCV_V_VFMACC_8VLsx1x1_F32_F32,
+        MMAIntrinsic::MMA_RISCV_V_VFMACC_1x8VLsx1_F16_F16,
+        MMAIntrinsic::MMA_RISCV_V_VFMACC_8VLsx1x1_F16_F16,
+        MMAIntrinsic::MMA_RISCV_V_VFWMACC_1x8VLsx1_F32_F16,
+        MMAIntrinsic::MMA_RISCV_V_VFWMACC_8VLsx1x1_F32_F16,
+        MMAIntrinsic::MMA_RISCV_V_VFMACC_1x8VLsx1_F32_F16_CASTF32,
+        MMAIntrinsic::MMA_RISCV_V_VFMACC_8VLsx1x1_F32_F16_CASTF32,
+        MMAIntrinsic::MMA_RISCV_V_VFMACC_1x8VLsx1_F16_F16_WIDENF32,
+        MMAIntrinsic::MMA_RISCV_V_VFMACC_8VLsx1x1_F16_F16_WIDENF32,
+    };
+    checkIntrinsicRequiredFeatures(config, kAllRiscvV, out);
   }
   out.push_back(pickGenericScalarMMAForTarget(config));
-  assert(isMmaIntrinsicArrayValid(config.getContext(), out) &&
+  assert(isMmaIntrinsicArrayValid(config, out) &&
          "getMmaIntrinsicsForTargetConfig must return a list satisfying the "
          "conventions in IREECPUEnums.td (strictly increasing, paired "
          "natural/swapped entries, etc.)");
@@ -577,7 +670,7 @@ struct IntrinsicInfo {
 /// generic-scalar branch of `chooseUnrolling` doesn't read them.
 static std::optional<IntrinsicInfo>
 getIntrinsicInfo(MLIRContext *ctx, ArrayRef<Type> elementTypes,
-                 IREE::CPU::MMAIntrinsic intr) {
+                 IREE::CPU::MMAIntrinsic intr, int64_t vlen) {
   if (IREE::CPU::isGenericScalar(intr)) {
     if (elementTypes.size() != 3 || !elementTypes[0] || !elementTypes[1] ||
         !elementTypes[2]) {
@@ -598,7 +691,7 @@ getIntrinsicInfo(MLIRContext *ctx, ArrayRef<Type> elementTypes,
       accTy != elementTypes[2]) {
     return std::nullopt;
   }
-  auto mnk = IREE::CPU::getRowMajorTilesMNKShape(intr);
+  auto mnk = IREE::CPU::getIntrinsicMNKShape(intr, vlen);
   if (!mnk) {
     return std::nullopt;
   }
@@ -610,6 +703,29 @@ getIntrinsicInfo(MLIRContext *ctx, ArrayRef<Type> elementTypes,
   info.lhsBits = lhsTy.getIntOrFloatBitWidth();
   info.rhsBits = rhsTy.getIntOrFloatBitWidth();
   info.accBits = accTy.getIntOrFloatBitWidth();
+  // The vector operand is extf'd to f32 before vfmacc.vf, so it occupies an
+  // LMUL=4 group. WIDENF32 also keeps the accumulator at f32 across K.
+  bool billVectorAsF32 = false;
+  switch (intr) {
+  case IREE::CPU::MMAIntrinsic::MMA_RISCV_V_VFMACC_1x8VLsx1_F32_F16_CASTF32:
+  case IREE::CPU::MMAIntrinsic::MMA_RISCV_V_VFMACC_8VLsx1x1_F32_F16_CASTF32:
+    billVectorAsF32 = true;
+    break;
+  case IREE::CPU::MMAIntrinsic::MMA_RISCV_V_VFMACC_1x8VLsx1_F16_F16_WIDENF32:
+  case IREE::CPU::MMAIntrinsic::MMA_RISCV_V_VFMACC_8VLsx1x1_F16_F16_WIDENF32:
+    billVectorAsF32 = true;
+    info.accBits = 32;
+    break;
+  default:
+    break;
+  }
+  if (billVectorAsF32) {
+    if (IREE::CPU::isMNSwapped(intr)) {
+      info.lhsBits = 32;
+    } else {
+      info.rhsBits = 32;
+    }
+  }
   return info;
 }
 
@@ -633,6 +749,7 @@ static IREE::CPU::MMAIntrinsic
 chooseIntrinsic(MLIRContext *ctx, ArrayRef<Type> elementTypes,
                 DictionaryAttr config,
                 const IREE::Encoding::BxMxNxKxKb &matmulSizes) {
+  int64_t vlen = getVlenBitsForConfig(config);
   auto usefulSize = [](int64_t matmulSize, int64_t intrinsicSize) -> int64_t {
     return ShapedType::isDynamic(matmulSize)
                ? intrinsicSize
@@ -642,7 +759,7 @@ chooseIntrinsic(MLIRContext *ctx, ArrayRef<Type> elementTypes,
   std::pair<int64_t, int64_t> bestScore = {-1, -1};
   for (IREE::CPU::MMAIntrinsic intr : getMmaIntrinsicsForTargetConfig(config)) {
     std::optional<IntrinsicInfo> info =
-        getIntrinsicInfo(ctx, elementTypes, intr);
+        getIntrinsicInfo(ctx, elementTypes, intr, vlen);
     if (!info) {
       continue;
     }
@@ -696,9 +813,10 @@ static int64_t unrollCap(int64_t matmulSize, int64_t intrinsicSize,
 // tiling outright.
 static std::optional<std::tuple<int64_t, int64_t, int64_t>>
 chooseUnrolling(MLIRContext *ctx, ArrayRef<Type> elementTypes,
-                IREE::CPU::MMAIntrinsic intr,
+                IREE::CPU::MMAIntrinsic intr, int64_t vlen,
                 const IREE::Encoding::BxMxNxKxKb &matmulSizes) {
-  std::optional<IntrinsicInfo> info = getIntrinsicInfo(ctx, elementTypes, intr);
+  std::optional<IntrinsicInfo> info =
+      getIntrinsicInfo(ctx, elementTypes, intr, vlen);
   if (!info) {
     return std::nullopt;
   }
@@ -727,7 +845,7 @@ chooseUnrolling(MLIRContext *ctx, ArrayRef<Type> elementTypes,
     budget = IREE::CPU::getGenericScalarRegisterBudget(intr);
     accUnit = lhsUnit = rhsUnit = 1;
   } else {
-    budget = IREE::CPU::getRegisterSpaceBytes(intr) * 8;
+    budget = IREE::CPU::getRegisterSpaceBytes(intr, vlen) * 8;
     accUnit = info->accBits;
     lhsUnit = info->lhsBits;
     rhsUnit = info->rhsBits;
@@ -782,13 +900,14 @@ chooseCpuInnerTiledMmaForEncoding(MLIRContext *ctx,
   if (failed(matmulSizes)) {
     return {};
   }
+  int64_t vlen = getVlenBitsForConfig(config);
   IREE::CPU::MMAIntrinsic intr =
       chooseIntrinsic(ctx, elementTypes, config, *matmulSizes);
   if (intr == IREE::CPU::MMAIntrinsic::None) {
     return {};
   }
   std::optional<std::tuple<int64_t, int64_t, int64_t>> unroll =
-      chooseUnrolling(ctx, elementTypes, intr, *matmulSizes);
+      chooseUnrolling(ctx, elementTypes, intr, vlen, *matmulSizes);
   if (!unroll) {
     return {};
   }
@@ -802,9 +921,9 @@ chooseCpuInnerTiledMmaForEncoding(MLIRContext *ctx,
     rhsType = elementTypes[1];
     accType = elementTypes[2];
   }
-  return IREE::CPU::DataTiledMMAAttr::get(ctx, intr, intrinsicsM, intrinsicsN,
-                                          intrinsicsK, lhsType, rhsType,
-                                          accType);
+  return IREE::CPU::DataTiledMMAAttr::get(
+      ctx, intr, intrinsicsM, intrinsicsN, intrinsicsK, lhsType, rhsType,
+      accType, IREE::CPU::isVlenParameterized(intr) ? vlen : 0);
 }
 
 /// Lowers a contraction under a `CPUEncodingResolverAttr` with
@@ -964,6 +1083,138 @@ Operation *lowerContractionOpWithEncoding(
   return result;
 }
 
+/// Builds 9D linalg.generic implementing data-tiled convolution
+/// over already-packed, rank-5/6 operands.
+static linalg::GenericOp
+buildDataTiledConvOp(OpBuilder &builder, Location loc, Value packedInput,
+                     Value packedFilter, Value packedOutput,
+                     ArrayRef<int64_t> strides, ArrayRef<int64_t> dilations) {
+  auto outputType = cast<RankedTensorType>(packedOutput.getType());
+  IREE::Codegen::DataTiledConvIterationSpace space =
+      IREE::Codegen::getDataTiledConvIterationSpace(builder.getContext(),
+                                                    strides, dilations);
+  return linalg::GenericOp::create(
+      builder, loc, outputType,
+      /*inputs=*/ValueRange{packedInput, packedFilter},
+      /*outputs=*/ValueRange{packedOutput}, space.indexingMaps,
+      space.iteratorTypes, [](OpBuilder &b, Location l, ValueRange args) {
+        Value mul = arith::MulFOp::create(b, l, args[0], args[1]);
+        Value add = arith::AddFOp::create(b, l, mul, args[2]);
+        linalg::YieldOp::create(b, l, add);
+      });
+}
+
+/// Lowers a data-tiled convolution whose operands carry conv encodings.
+///
+/// Builds a 9-D linalg.generic over the packed operands:
+///   input:  [N, IC/c0, H, W, c0]
+///   filter: [OC/k0, IC/c0, FH, FW, c0, k0]
+///   output: [N, OC/k0, OH, OW, k0]
+Operation *lowerConvolutionOpWithEncoding(
+    OpBuilder &builder, linalg::LinalgOp linalgOp, ValueRange operands,
+    IREE::Encoding::LayoutMaterializerAttr layoutAttr) {
+  if (!linalgOp.hasPureTensorSemantics()) {
+    return nullptr;
+  }
+
+  auto inputs = linalgOp.getDpsInputOperands();
+  auto outputs = linalgOp.getDpsInits();
+
+  auto encodedInputType = cast<RankedTensorType>(inputs[0]->get().getType());
+  auto encodedFilterType = cast<RankedTensorType>(inputs[1]->get().getType());
+  auto encodedOutputType = cast<RankedTensorType>(outputs[0].getType());
+  auto inEncoding = IREE::Encoding::getEncodingAttr(encodedInputType);
+  auto filterEncoding = IREE::Encoding::getEncodingAttr(encodedFilterType);
+  auto outEncoding = IREE::Encoding::getEncodingAttr(encodedOutputType);
+  if (!inEncoding || !filterEncoding || !outEncoding) {
+    return nullptr;
+  }
+
+  if (inEncoding.getOperandIndex().getValue() != IREE::Encoding::CONV_IN ||
+      filterEncoding.getOperandIndex().getValue() !=
+          IREE::Encoding::CONV_FILTER ||
+      outEncoding.getOperandIndex().getValue() != IREE::Encoding::CONV_OUT) {
+    return nullptr;
+  }
+
+  MaterializeEncodingInfo encodingInfo = {};
+  if (auto packedLayoutAttr =
+          dyn_cast<IREE::Codegen::PackedLayoutMaterializerAttr>(layoutAttr)) {
+    encodingInfo = packedLayoutAttr.getEncodingInfo(
+        cast<RankedTensorType>(linalgOp->getResultTypes()[0]));
+  }
+
+  if (isIdentityLayout(encodingInfo)) {
+    return dropEncodingAndCloneOp(builder, linalgOp,
+                                  operands.take_front(inputs.size()),
+                                  operands.drop_front(inputs.size()));
+  }
+
+  Value packedInput = operands[0];
+  Value packedFilter = operands[1];
+  Value packedOutput = operands[2];
+
+  Location loc = linalgOp.getLoc();
+
+  auto packedInputType = cast<RankedTensorType>(packedInput.getType());
+  auto packedOutputType = cast<RankedTensorType>(packedOutput.getType());
+
+  // Expected packed ranks for a 2D conv: input/output rank-5 ([N, IC/c0, H, W,
+  // c0] and [N, OC/k0, OH, OW, k0]), or rank-4 if the N=1 batch dim has been
+  // folded away upstream, and filter rank-6 ([OC/k0, IC/c0, FH, FW, c0, k0]).
+  const int64_t inRank = packedInputType.getRank();
+  const int64_t outRank = packedOutputType.getRank();
+  const int64_t filterRank =
+      cast<RankedTensorType>(packedFilter.getType()).getRank();
+  if ((inRank != 4 && inRank != 5) || inRank != outRank || filterRank != 6) {
+    return nullptr;
+  }
+
+  // WORKAROUND: When N=1, upstream folding may remove the batch dimension.
+  // Restore it so the remainder of this lowering can assume rank-5 packed
+  // tensors. If batch folding before materialization is eventually prevented,
+  // this expand/collapse workaround can be dropped.
+  auto prependUnitBatchDim = [&](Value src) -> Value {
+    auto srcType = cast<RankedTensorType>(src.getType());
+
+    SmallVector<int64_t, 5> expandedShape = {1};
+    expandedShape.append(srcType.getShape().begin(), srcType.getShape().end());
+
+    SmallVector<ReassociationIndices> ri = {{0, 1}, {2}, {3}, {4}};
+
+    return tensor::ExpandShapeOp::create(
+        builder, loc,
+        RankedTensorType::get(expandedShape, srcType.getElementType()), src,
+        ri);
+  };
+
+  bool batchDimFolded = (inRank == 4);
+  if (batchDimFolded) {
+    // [IC/c0, H, W, c0] -> [1, IC/c0, H, W, c0]
+    packedInput = prependUnitBatchDim(packedInput);
+    // [OC/k0, OH, OW, k0] -> [1, OC/k0, OH, OW, k0]
+    packedOutput = prependUnitBatchDim(packedOutput);
+  }
+
+  auto cDims = linalg::inferConvolutionDims(linalgOp);
+  if (failed(cDims) || cDims->strides.size() != 2 ||
+      cDims->dilations.size() != 2) {
+    return nullptr;
+  }
+
+  Operation *convOp =
+      buildDataTiledConvOp(builder, loc, packedInput, packedFilter,
+                           packedOutput, cDims->strides, cDims->dilations);
+
+  // [1, OC/k0, OH, OW, k0] -> [OC/k0, OH, OW, k0]
+  if (batchDimFolded) {
+    SmallVector<ReassociationIndices> ri = {{0, 1}, {2}, {3}, {4}};
+    return tensor::CollapseShapeOp::create(builder, loc, packedOutputType,
+                                           convOp->getResult(0), ri);
+  }
+  return convOp;
+}
+
 //===----------------------------------------------------------------------===//
 // Interface methods implementation for iree_cpu.cpu_encoding_resolver.
 //===----------------------------------------------------------------------===//
@@ -983,38 +1234,6 @@ enumerateMatmulTileRiscv32(DictionaryAttr config) {
   }
   // Fallback - no architecture-optimized tile size for this case.
   return {};
-}
-// RISC-V has vector register length extensions: zvl128b, zvl256b etc.
-// If these extension are specified in target cpu feature,
-// they can be used to determine VLEN. This function assumes that
-// 'v' feature is present
-size_t getRISCVVVlenFromCPUFeatures(DictionaryAttr config) {
-  // If +zvl* feature is not explicitly specified,
-  // fallback to +zvl128b, as spec specifies minimum VLEN
-  // of 128b for the V extension: https://rb.gy/p8rbzv
-  size_t vlen;
-  if (hasFeature(config, "+zvl65536b")) {
-    vlen = 65536;
-  } else if (hasFeature(config, "+zvl32768b")) {
-    vlen = 32768;
-  } else if (hasFeature(config, "+zvl16384b")) {
-    vlen = 16384;
-  } else if (hasFeature(config, "+zvl8192b")) {
-    vlen = 8192;
-  } else if (hasFeature(config, "+zvl4096b")) {
-    vlen = 4096;
-  } else if (hasFeature(config, "+zvl2048b")) {
-    vlen = 2048;
-  } else if (hasFeature(config, "+zvl1024b")) {
-    vlen = 1024;
-  } else if (hasFeature(config, "+zvl512b")) {
-    vlen = 512;
-  } else if (hasFeature(config, "+zvl256b")) {
-    vlen = 256;
-  } else {
-    vlen = 128;
-  }
-  return vlen;
 }
 // Enumerate tile sizes to choose from on riscv64.
 // For narrow-{M,N} cases, this only enumerates on narrow M. The narrow-N cases
@@ -1090,14 +1309,53 @@ enumerateMatmulTileRiscv64(TypeRange elementTypes, DictionaryAttr config) {
       };
     }
   }
-  // Integer 8 path: standard RVV widening multiply-accumulate.
-  // Same formula as the f32 path: N0 = VLEN/8, targeting LMUL=4 for i32
-  // accumulators. The widening chain is i8(m1) -> i16(m2) -> i32(m4),
-  // fully utilizing the register capacity at any VLEN.
-  // M0=7 with LMUL=4 accumulators: 7*4 + 2(prod) + 1(rhs) = 31 regs.
+  // BF16 path: RVV bf16 widening multiply-accumulate via Zvfbfwma.
+  // Same formula as the f32 path: N0 = VLEN/8, so the bf16 operands are LMUL=2
+  // (m2) and the f32 accumulators EMUL=4 (m4). vfwmaccbf16 fuses the bf16 ->
+  // f32 widening into the MAC, so the accumulator is f32 and there is no
+  // bf16-accumulator variant.
+  // M0=7 with EMUL=4 accumulators: 7*4 + 2(rhs) = 30 regs.
+  if (lhs.isBF16() && rhs.isBF16() && out.isF32()) {
+    int N0 = vlen / 8;
+    if (hasFeature(config, "+zvfbfwma")) {
+      return {
+          TileMxNxK{7, N0, 1}, // Aim to use VFWMACCBF16.VF.
+          TileMxNxK{4, N0, 1}, // Truncation of the above.
+          TileMxNxK{2, N0, 1}, // Truncation of the above.
+          TileMxNxK{1, N0, 1}, // Truncation of the above.
+      };
+    }
+  }
+  // Integer 8 path.
   if (lhs.isSignlessInteger(8) && rhs.isSignlessInteger(8) &&
       out.isSignlessInteger(32)) {
     int N0 = vlen / 8;
+    // SpaceMiT IME (vmadot): fixed hardware tiles for VLEN ∈ {256, 1024,
+    // 4096}. Primary tile is a 3×4 grid of the SEW=8 MAC atom (4×4×8 / 8×8×16
+    // / 16×16×32); narrow truncations of the same grid (2×4 and 1×4 atom
+    // rows) share the same N0/K0 and only shrink M0, to avoid excessive
+    // padding for narrow-M matmuls. Other VLENs / scalable mode
+    // fall through to standard RVV tiles.
+    if (hasFeature(config, "+xsmtvdot") && !isScalableVectorizationEnabled()) {
+      int atom = 0;
+      if (vlen == 256) {
+        atom = 4;
+      } else if (vlen == 1024) {
+        atom = 8;
+      } else if (vlen == 4096) {
+        atom = 16;
+      }
+      if (atom != 0) {
+        return {
+            TileMxNxK{3 * atom, 4 * atom, 2 * atom}, // Primary: 3x4 grid.
+            TileMxNxK{2 * atom, 4 * atom, 2 * atom}, // Narrow: 2x4 grid.
+            TileMxNxK{1 * atom, 4 * atom, 2 * atom}, // Narrow: 1x4 grid.
+        };
+      }
+    }
+    // Standard RVV widening multiply-accumulate.
+    // Widening chain: i8(m1) -> i16(m2) -> i32(m4).
+    // M0=7 with LMUL=4 accumulators: 7*4 + 2(prod) + 1(rhs) = 31 regs.
     return {
         TileMxNxK{7, N0, 1}, // Primary shape for RVV widening int8 kernels.
         TileMxNxK{4, N0, 1}, // Truncation of the above.
@@ -1328,6 +1586,57 @@ enumerateCPUMatmulTiles(IREE::Encoding::EncodingAttr encoding,
   return {};
 }
 
+// Enumerate (OC, IC) conv inner tile sizes to choose from on arm64.
+static SmallVector<TileOCxIC> enumerateConvTileArm64(TypeRange elementTypes,
+                                                     DictionaryAttr config) {
+  assert(elementTypes.size() == 3 && "expected input, filter, output types");
+  Type inputElem = elementTypes[0];
+  Type filterElem = elementTypes[1];
+  Type outputElem = elementTypes[2];
+  // Only fp32 is currently supported; the tile shape and
+  // the ukernel are specific to 32-bit float lanes.
+  if (inputElem.isF32() && filterElem.isF32() && outputElem.isF32()) {
+    return {TileOCxIC{8, 8}}; // Aim to use FMLA (neon).
+  }
+
+  // Fallback - no architecture-optimized tile size for this case.
+  return {};
+}
+
+// Enumerate (OC, IC) conv inner tile sizes to choose from on x86-64.
+static SmallVector<TileOCxIC> enumerateConvTileX86_64(TypeRange elementTypes,
+                                                      DictionaryAttr config) {
+  assert(elementTypes.size() == 3 && "expected input, filter, output types");
+  Type inputElem = elementTypes[0];
+  Type filterElem = elementTypes[1];
+  Type outputElem = elementTypes[2];
+  // Only fp32 is currently supported; the tile shape and
+  // the ukernel are specific to 32-bit float lanes.
+  if (inputElem.isF32() && filterElem.isF32() && outputElem.isF32()) {
+    if (hasFeature(config, "+avx512f")) {
+      return {TileOCxIC{16, 16}}; // Aim to use VFMADD* (zmm).
+    }
+  }
+
+  // Fallback - no architecture-optimized tile size for this case.
+  return {};
+}
+
+static SmallVector<TileOCxIC>
+enumerateCPUConvTiles(IREE::Encoding::EncodingAttr encoding,
+                      DictionaryAttr config) {
+  SmallVector<Type> elementTypes = encoding.getElementTypesArray();
+  if (isAArch64(config)) {
+    return enumerateConvTileArm64(elementTypes, config);
+  }
+  if (isX86_64(config)) {
+    return enumerateConvTileX86_64(elementTypes, config);
+  }
+
+  // Fallback - no architecture-optimized tile size for this case.
+  return {};
+}
+
 struct CPUEncodingPackedLayoutMaterializerAttr
     : PackedLayoutMaterializerAttrExternalModelBase<
           CPUEncodingPackedLayoutMaterializerAttr, CPUEncodingResolverAttr> {
@@ -1346,6 +1655,30 @@ struct CPUEncodingPackedLayoutMaterializerAttr
     MaterializeEncodingInfo info;
     if (!encoding) {
       return info;
+    }
+
+    // Handle convolution encodings.
+    if (encoding.getOpType().getValue() ==
+        IREE::Encoding::EncodingOpType::conv) {
+      FailureOr<linalg::ConvolutionDimensions> cDims =
+          linalg::inferConvolutionDims(encoding.getRootMaps());
+      if (failed(cDims) || !cDims->depth.empty() ||
+          cDims->outputImage.size() != 2 ||
+          llvm::any_of(cDims->dilations, [](int64_t d) { return d != 1; })) {
+        return info; // identity layout
+      }
+      SmallVector<TileOCxIC> tiles =
+          enumerateCPUConvTiles(encoding, layoutAttr.getConfiguration());
+      if (tiles.empty()) {
+        return info;
+      }
+      TileOCxIC tile = tiles[0];
+      FailureOr<MaterializeEncodingInfo> maybeInfo =
+          IREE::Codegen::getEncodingInfoForConv(encoding, tile);
+      if (failed(maybeInfo)) {
+        return info;
+      }
+      return maybeInfo.value();
     }
 
     // We only know about contractions with {Batch, M, N, K} <= 1 at the moment.
@@ -1440,6 +1773,10 @@ private:
       return info;
     }
     info = std::move(maybeEncodingInfo.value());
+    // TODO(egebeysel): this does not work. The tile shape comes from an
+    // intrinsic and is static, so marking a dim scalable makes the packed
+    // extent dynamic while the inner tile type keeps its literal size, and the
+    // `expand_shape` onto the inner tile is then rejected.
     FailureOr<IREE::Codegen::ScalableTileFlags> scalableFlags =
         getScalableTileFlags(cDims, encoding, config);
     if (succeeded(scalableFlags)) {
@@ -1478,6 +1815,11 @@ struct CPUEncodingResolverMaterializerAttr final
       return dropEncodingAndCloneOp(b, linalgOp,
                                     convertedOperands.take_front(numInputs),
                                     convertedOperands.drop_front(numInputs));
+    }
+    if (linalg::isaConvolutionOpInterface(linalgOp)) {
+      return lowerConvolutionOpWithEncoding(
+          b, linalgOp, convertedOperands,
+          cast<IREE::Encoding::LayoutMaterializerAttr>(layoutAttr));
     }
     if (linalg::isaContractionOpInterface(linalgOp)) {
       DictionaryAttr config = layoutAttr.getConfiguration();
